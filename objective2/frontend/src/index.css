@@ -1,0 +1,102 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@layer base {
+  :root {
+    --font-sans: 'Plus Jakarta Sans', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    --color-bg-base: #f8fafc;
+    --color-bg-surface: #ffffff;
+    --color-border: #e2e8f0;
+    --color-text-primary: #0f172a;
+    --color-text-secondary: #475569;
+    --color-accent-violet: #7c3aed;
+    --color-accent-indigo: #4f46e5;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+    overflow: hidden;
+  }
+
+  code, pre, kbd, samp {
+    font-family: 'JetBrains Mono', monospace;
+  }
+}
+
+/* Light Mode Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* React Flow Light Theme Custom Styling */
+.react-flow__attribution {
+  display: none !important;
+}
+
+.react-flow__background {
+  background-color: #f8fafc !important;
+}
+
+.react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  border: 2px solid #ffffff !important;
+  background-color: #64748b !important;
+  transition: transform 0.15s ease, background-color 0.15s ease;
+}
+
+.react-flow__handle:hover {
+  background-color: #7c3aed !important;
+  transform: scale(1.3);
+}
+
+/* Custom Edge Animation */
+@keyframes edgeFlowLight {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animated-risk-edge {
+  stroke-dasharray: 6 4;
+  animation: edgeFlowLight 1.2s linear infinite;
+}
+
+/* Subtle Breathing Glow for High Risk Components */
+@keyframes subtleBreathLight {
+  0%, 100% {
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05), 0 0 0 1px rgba(244, 63, 94, 0.3);
+  }
+  50% {
+    box-shadow: 0 4px 12px -2px rgba(244, 63, 94, 0.2), 0 0 0 2px rgba(244, 63, 94, 0.5);
+  }
+}
+
+.pulse-risk-glow {
+  animation: subtleBreathLight 2.5s ease-in-out infinite;
+}
+
+/* Node Selection Glow */
+.node-selected-glow {
+  box-shadow: 0 0 0 3px rgba(124, 58, 237, 0.35), 0 8px 20px -4px rgba(124, 58, 237, 0.2) !important;
+  border-color: #7c3aed !important;
+}

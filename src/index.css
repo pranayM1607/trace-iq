@@ -1,0 +1,92 @@
+@import "tailwindcss";
+@import "@xyflow/react/dist/style.css";
+
+@layer base {
+  :root {
+    --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+  }
+
+  body {
+    margin: 0;
+    padding: 0;
+    font-family: var(--font-sans);
+    background-color: #f8fafc;
+    color: #0f172a;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #f1f5f9;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #cbd5e1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #94a3b8;
+}
+
+/* React Flow custom styling */
+.react-flow__background {
+  background-color: #f8fafc;
+}
+
+.react-flow__edge-path {
+  stroke-linecap: round;
+  transition: stroke 0.2s ease, stroke-width 0.2s ease, opacity 0.2s ease;
+}
+
+.react-flow__handle {
+  width: 8px !important;
+  height: 8px !important;
+  border-radius: 50% !important;
+  border: 2px solid white !important;
+  background-color: #64748b !important;
+}
+
+.react-flow__handle:hover {
+  background-color: #2563eb !important;
+  transform: scale(1.2);
+}
+
+/* Custom Edge Animation */
+@keyframes edgeDash {
+  to {
+    stroke-dashoffset: -20;
+  }
+}
+
+.animated-edge-path {
+  stroke-dasharray: 5;
+  animation: edgeDash 1.2s linear infinite;
+}
+
+/* Node Glow effect when active/focused */
+.node-highlighted {
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.45), 0 10px 25px -5px rgba(37, 99, 235, 0.25) !important;
+  border-color: #2563eb !important;
+  z-index: 10 !important;
+}
+
+.node-dimmed {
+  opacity: 0.50 !important;
+  filter: grayscale(10%) !important;
+  transition: opacity 0.2s ease, filter 0.2s ease;
+}
+
+.edge-dimmed {
+  opacity: 0.40 !important;
+}
+
+.edge-highlighted {
+  opacity: 1 !important;
+}
