@@ -30,6 +30,8 @@ export interface BlueprintParseResult {
   entities: ArchitectureEntity[];
   relationships: ArchitectureRelationship[];
   issues: ValidationIssue[];
+  originalJsonPayload?: any;
+  rawJsonString?: string;
 }
 
 export function parseAndValidateBlueprint(jsonString: string): BlueprintParseResult {
@@ -244,5 +246,7 @@ export function parseAndValidateBlueprint(jsonString: string): BlueprintParseRes
     entities,
     relationships,
     issues,
+    originalJsonPayload: JSON.parse(JSON.stringify(parsed)),
+    rawJsonString: jsonString,
   };
 }

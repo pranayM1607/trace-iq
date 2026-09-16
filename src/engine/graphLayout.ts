@@ -5,6 +5,8 @@ import type {
   ArchitectureRelationship,
   EntityType,
   RelationshipType,
+  DiffNodeItem,
+  DiffRelationshipItem,
 } from '../types/architecture';
 
 export interface LayoutOptions {
@@ -42,10 +44,14 @@ export interface VisualStateOptions {
   selectedTypeFilter: EntityType | 'ALL';
   selectedRelFilter: RelationshipType | 'ALL';
   searchTerm: string;
+  diffMode?: boolean;
+  diffNodesMap?: Map<string, DiffNodeItem>;
+  diffEdgesMap?: Map<string, DiffRelationshipItem>;
 }
 
 export const NODE_DIMENSIONS: Record<EntityType, { width: number; height: number }> = {
   'Service': { width: 260, height: 105 },
+  'Application': { width: 260, height: 105 },
   'API': { width: 240, height: 95 },
   'Database': { width: 250, height: 105 },
   'Module': { width: 230, height: 90 },
@@ -58,6 +64,11 @@ const RELATIONSHIP_COLORS: Record<RelationshipType, string> = {
   DEPENDS_ON: '#7c3aed',  // Purple
   USES: '#059669',        // Emerald green
   CONNECTS_TO: '#d97706', // Amber
+  IMPORTS: '#6366f1',     // Indigo
+  QUERIES: '#0891b2',     // Cyan
+  LOADS: '#d97706',       // Amber
+  EXPOSES: '#0284c7',     // Sky
+  CONTAINS: '#64748b',    // Slate
 };
 
 /**
@@ -94,15 +105,17 @@ function computeArchitecturalTiers(
     (e) => e.type !== 'Database' && e.type !== 'External System'
   );
 
-  // Identify entry points (in-degree 0 or frontend/client in name)
+  // Identify entry points (Applications, in-degree 0, or frontend/client in name)
   const entryPoints = nonSinks.filter((e) => {
     const parents = revAdj.get(e.id) || [];
     const idLower = e.id.toLowerCase();
     const nameLower = e.name.toLowerCase();
     return (
+      e.type === 'Application' ||
       parents.length === 0 ||
       idLower.includes('frontend') ||
       idLower.includes('client') ||
+      idLower.includes('extension') ||
       idLower.includes('ui') ||
       nameLower.includes('frontend') ||
       nameLower.includes('client')
@@ -271,6 +284,9 @@ export function decorateGraphVisuals(
     selectedTypeFilter,
     selectedRelFilter,
     searchTerm,
+    diffMode = false,
+    diffNodesMap,
+    diffEdgesMap,
   } = visualState;
 
   const cleanSearch = searchTerm.trim().toLowerCase();
@@ -322,6 +338,7 @@ export function decorateGraphVisuals(
   // 3. Map entities to React Flow Node objects
   const nodeTypeMap: Record<EntityType, string> = {
     'Service': 'serviceNode',
+    'Application': 'serviceNode',
     'API': 'apiNode',
     'Database': 'databaseNode',
     'Module': 'moduleNode',
@@ -364,9 +381,14 @@ export function decorateGraphVisuals(
     // Node is dimmed if it fails any active visual criterion
     const isDimmed = !isSearchMatch || !isTypeMatch || !isRelMatch || !isNeighborMatch;
 
-    // Count incoming & outgoing connections
+    // Check incoming & outgoing connections
     const incomingCount = relationships.filter((r) => r.target === entity.id).length;
     const outgoingCount = relationships.filter((r) => r.source === entity.id).length;
+
+    // Check diff metadata if in diff mode
+    const diffNode = diffMode && diffNodesMap ? diffNodesMap.get(entity.id.toLowerCase().trim()) : undefined;
+    const diffChangeType = diffNode?.changeType;
+    const versionOrigin = diffNode?.versionOrigin;
 
     return {
       id: entity.id,
@@ -385,13 +407,43 @@ export function decorateGraphVisuals(
         incomingCount,
         outgoingCount,
         direction,
+        diffMode: !!diffMode,
+        diffChangeType,
+        versionOrigin,
       },
     };
   });
 
   // 4. Map relationships to React Flow Edge objects
   const edges: Edge[] = relationships.map((rel) => {
-    const color = RELATIONSHIP_COLORS[rel.type] || '#64748b';
+    const relKey = `${rel.source.toLowerCase().trim()}->${rel.target.toLowerCase().trim()}:${rel.type}`;
+    const diffRel = diffMode && diffEdgesMap ? diffEdgesMap.get(relKey) : undefined;
+    const diffChangeType = diffRel?.changeType;
+
+    let edgeColor = RELATIONSHIP_COLORS[rel.type] || '#64748b';
+    let strokeWidth = 1.75;
+    let strokeDasharray: string | undefined = undefined;
+    let opacity = 1;
+    let isAnimated = rel.type === 'CALLS';
+
+    if (diffMode && diffChangeType) {
+      if (diffChangeType === 'added') {
+        edgeColor = '#059669'; // Emerald 600
+        strokeWidth = 3;
+        isAnimated = true;
+      } else if (diffChangeType === 'removed') {
+        edgeColor = '#e11d48'; // Rose 600
+        strokeWidth = 2.25;
+        strokeDasharray = '6 4';
+        opacity = 0.7;
+        isAnimated = false;
+      } else {
+        // unchanged in diff mode: muted clean appearance
+        edgeColor = '#94a3b8';
+        opacity = 0.65;
+        isAnimated = false;
+      }
+    }
 
     let isHighlighted = false;
     let isDimmed = false;
@@ -399,21 +451,32 @@ export function decorateGraphVisuals(
     if (isNodeSelected || isEdgeSelected) {
       if (selectedEdges.has(rel.id)) {
         isHighlighted = true;
+        strokeWidth = Math.max(strokeWidth + 1.5, 3.5);
+        opacity = 1;
       } else {
         isDimmed = true;
+        opacity = 0.35;
       }
     } else if (isRelFilterActive) {
       if (rel.type === selectedRelFilter) {
         isHighlighted = true;
+        strokeWidth = Math.max(strokeWidth + 1.5, 3.5);
+        opacity = 1;
       } else {
         isDimmed = true;
+        opacity = 0.35;
       }
     } else if (isTypeFilterActive || isSearchActive) {
       const sourceNode = nodes.find((n) => n.id === rel.source);
       const targetNode = nodes.find((n) => n.id === rel.target);
       if (sourceNode?.data.isDimmed || targetNode?.data.isDimmed) {
         isDimmed = true;
+        opacity = 0.35;
       }
+    }
+
+    if (isDimmed) {
+      isAnimated = false;
     }
 
     return {
@@ -421,21 +484,25 @@ export function decorateGraphVisuals(
       source: rel.source,
       target: rel.target,
       type: 'typedEdge',
-      animated: rel.type === 'CALLS' && !isDimmed,
+      animated: isAnimated,
       data: {
         relationship: rel,
         isHighlighted,
         isDimmed,
-        color,
+        color: edgeColor,
+        diffMode: !!diffMode,
+        diffChangeType,
+        diffRel,
       },
       style: {
-        stroke: color,
-        strokeWidth: isHighlighted ? 3.5 : 1.75,
-        opacity: isDimmed ? 0.42 : 1,
+        stroke: edgeColor,
+        strokeWidth,
+        strokeDasharray,
+        opacity,
       },
       markerEnd: {
         type: MarkerType.ArrowClosed,
-        color: color,
+        color: edgeColor,
         width: 18,
         height: 18,
       },

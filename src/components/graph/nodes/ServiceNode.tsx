@@ -2,7 +2,7 @@ import React, { memo } from 'react';
 import { Handle, Position } from '@xyflow/react';
 import type { NodeProps } from '@xyflow/react';
 import { Server, ArrowDownLeft, ArrowUpRight, CheckCircle2, FileCode } from 'lucide-react';
-import type { ArchitectureEntity } from '../../../types/architecture';
+import type { ArchitectureEntity, DiffChangeType } from '../../../types/architecture';
 
 export interface CustomNodeData {
   entity: ArchitectureEntity;
@@ -12,6 +12,9 @@ export interface CustomNodeData {
   incomingCount?: number;
   outgoingCount?: number;
   direction?: 'LR' | 'TB';
+  diffMode?: boolean;
+  diffChangeType?: DiffChangeType;
+  versionOrigin?: 'V1' | 'V2' | 'BOTH';
 }
 
 export const ServiceNode: React.FC<NodeProps> = memo(({ data }) => {
@@ -24,18 +27,36 @@ export const ServiceNode: React.FC<NodeProps> = memo(({ data }) => {
     incomingCount = 0,
     outgoingCount = 0,
     direction = 'LR',
+    diffMode = false,
+    diffChangeType,
   } = nodeData;
 
   const targetPosition = direction === 'LR' ? Position.Left : Position.Top;
   const sourcePosition = direction === 'LR' ? Position.Right : Position.Bottom;
 
-  const visualClass = isSelected
+  let visualClass = isSelected
     ? 'border-blue-600 ring-4 ring-blue-500/30 shadow-lg scale-[1.02] z-30 opacity-100'
     : isConnected
     ? 'border-blue-400 ring-2 ring-blue-400/25 shadow-md z-20 opacity-95'
     : isDimmed
     ? 'opacity-50 border-slate-200 shadow-2xs hover:opacity-85'
     : 'border-slate-200/90 hover:border-blue-400 hover:shadow-md opacity-100';
+
+  if (diffMode && diffChangeType) {
+    if (diffChangeType === 'added') {
+      visualClass = isSelected
+        ? 'border-emerald-600 ring-4 ring-emerald-500/30 shadow-lg scale-[1.02] z-30 bg-emerald-50/20'
+        : 'border-emerald-500 bg-emerald-50/15 ring-2 ring-emerald-400/30 shadow-md';
+    } else if (diffChangeType === 'removed') {
+      visualClass = isSelected
+        ? 'border-dashed border-rose-600 ring-4 ring-rose-500/30 shadow-lg scale-[1.02] z-30 bg-rose-50/30'
+        : 'border-dashed border-rose-400 bg-rose-50/20 opacity-70 hover:opacity-95';
+    } else {
+      visualClass = isSelected
+        ? 'border-blue-600 ring-4 ring-blue-500/30 shadow-lg scale-[1.02] z-30'
+        : 'border-slate-200/80 opacity-80';
+    }
+  }
 
   return (
     <div
@@ -56,20 +77,34 @@ export const ServiceNode: React.FC<NodeProps> = memo(({ data }) => {
           <span className="text-[11px] font-bold uppercase tracking-wider text-blue-700">Service</span>
         </div>
         <div className="flex items-center gap-1">
-          <span
-            className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
-              entity.source === 'Detected'
-                ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
-                : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
-            }`}
-          >
-            {entity.source === 'Detected' ? (
-              <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />
-            ) : (
-              <FileCode className="w-2.5 h-2.5 mr-0.5" />
-            )}
-            {entity.source}
-          </span>
+          {diffMode && diffChangeType ? (
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold tracking-wider uppercase ${
+                diffChangeType === 'added'
+                  ? 'bg-emerald-600 text-white shadow-2xs'
+                  : diffChangeType === 'removed'
+                  ? 'bg-rose-600 text-white shadow-2xs'
+                  : 'bg-slate-200 text-slate-700'
+              }`}
+            >
+              {diffChangeType === 'added' ? '+ ADDED' : diffChangeType === 'removed' ? '- REMOVED' : 'UNCHANGED'}
+            </span>
+          ) : (
+            <span
+              className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                entity.source === 'Detected'
+                  ? 'bg-emerald-50 text-emerald-700 border border-emerald-200/60'
+                  : 'bg-indigo-50 text-indigo-700 border border-indigo-200/60'
+              }`}
+            >
+              {entity.source === 'Detected' ? (
+                <CheckCircle2 className="w-2.5 h-2.5 mr-0.5" />
+              ) : (
+                <FileCode className="w-2.5 h-2.5 mr-0.5" />
+              )}
+              {entity.source}
+            </span>
+          )}
         </div>
       </div>
 

@@ -5,13 +5,15 @@ import {
   getBezierPath,
 } from '@xyflow/react';
 import type { EdgeProps } from '@xyflow/react';
-import type { ArchitectureRelationship } from '../../../types/architecture';
+import type { ArchitectureRelationship, DiffChangeType } from '../../../types/architecture';
 
 export interface TypedEdgeData {
   relationship: ArchitectureRelationship;
   isHighlighted?: boolean;
   isDimmed?: boolean;
   color?: string;
+  diffMode?: boolean;
+  diffChangeType?: DiffChangeType;
 }
 
 export const TypedEdge: React.FC<EdgeProps> = memo(
@@ -41,8 +43,10 @@ export const TypedEdge: React.FC<EdgeProps> = memo(
     const isHighlighted = edgeData?.isHighlighted ?? false;
     const isDimmed = edgeData?.isDimmed ?? false;
     const color = edgeData?.color || '#2563eb';
+    const diffMode = edgeData?.diffMode ?? false;
+    const diffChangeType = edgeData?.diffChangeType;
 
-    const typeBadgeBg =
+    let typeBadgeBg =
       rel?.type === 'CALLS'
         ? 'bg-blue-50/95 text-blue-700 border-blue-300 shadow-2xs'
         : rel?.type === 'USES'
@@ -50,6 +54,16 @@ export const TypedEdge: React.FC<EdgeProps> = memo(
         : rel?.type === 'DEPENDS_ON'
         ? 'bg-purple-50/95 text-purple-700 border-purple-300 shadow-2xs'
         : 'bg-amber-50/95 text-amber-700 border-amber-300 shadow-2xs';
+
+    if (diffMode && diffChangeType) {
+      if (diffChangeType === 'added') {
+        typeBadgeBg = 'bg-emerald-600 text-white border-emerald-700 shadow-sm';
+      } else if (diffChangeType === 'removed') {
+        typeBadgeBg = 'bg-rose-600 text-white border-rose-700 shadow-sm';
+      } else {
+        typeBadgeBg = 'bg-slate-100 text-slate-600 border-slate-300';
+      }
+    }
 
     return (
       <>

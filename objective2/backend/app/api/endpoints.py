@@ -12,12 +12,15 @@ from ..models.schemas import (
     SpofAnalysis,
     ComplexityAnalysis,
     HighRiskDependency,
+    ChangeSimulationRequest,
+    ChangeSimulationResult,
 )
 from ..models.database import ProjectRecord, AnalysisRecord
 from ..database.session import get_db
 from ..data.demo_architecture import DEMO_ARCHITECTURE
 from ..services.pipeline_service import AnalysisPipeline
 from ..services.codebase_service import CodebaseService
+from ..services.simulation_service import SimulationService
 
 router = APIRouter(prefix="/api/v1", tags=["Objective 2 Architecture Analysis"])
 
@@ -204,3 +207,23 @@ def get_risk_analysis(project_id: str, db: Session = Depends(get_db)):
         "high_risk_dependencies": analysis.high_risk_dependencies,
         "component_risks": analysis.component_risks,
     }
+
+@router.post("/simulate", response_model=ChangeSimulationResult)
+def simulate_architecture_change(
+    request: ChangeSimulationRequest,
+    project_id: str = "sim-run",
+):
+    """
+    Executes an Objective 3 hypothetical change simulation on an architecture model.
+    Guarantees isolation: input architecture is never mutated.
+    Returns before/after analyses, affected nodes, propagation paths, risk delta, and Causal Risk Ledger.
+    """
+    if not request.current_architecture.entities:
+        raise HTTPException(status_code=400, detail="Current architecture must contain at least 1 entity.")
+
+    return SimulationService.simulate_change(
+        request.current_architecture,
+        request.changes,
+        project_id=project_id,
+    )
+

@@ -3,6 +3,9 @@ import type {
   ArchitectureModel,
   ArchitectureRelationship,
   ArchitectureStats,
+  CodebaseInventory,
+  CodebaseGraph,
+  InputIdentity,
 } from '../types/architecture';
 
 export interface ReconstructionInput {
@@ -12,10 +15,31 @@ export interface ReconstructionInput {
   entities: ArchitectureEntity[];
   relationships: ArchitectureRelationship[];
   sourceArtifacts?: string[];
+  inventory?: CodebaseInventory;
+  codebaseGraph?: CodebaseGraph;
+  isLimitedArchitecture?: boolean;
+  limitedArchitectureReason?: string;
+  inputIdentity?: InputIdentity;
+  originalJsonPayload?: any;
+  rawJsonString?: string;
+  scope?: 'complete' | 'partial';
 }
 
 export function reconstructArchitecture(input: ReconstructionInput): ArchitectureModel {
-  const { systemName, version = '1.0.0', inputType, sourceArtifacts = [] } = input;
+  const {
+    systemName,
+    version = '1.0.0',
+    inputType,
+    sourceArtifacts = [],
+    inventory,
+    codebaseGraph,
+    isLimitedArchitecture = false,
+    limitedArchitectureReason,
+    inputIdentity,
+    originalJsonPayload,
+    rawJsonString,
+    scope,
+  } = input;
 
   // Deduplicate and normalize entities
   const entityMap = new Map<string, ArchitectureEntity>();
@@ -31,6 +55,9 @@ export function reconstructArchitecture(input: ReconstructionInput): Architectur
       existing.metadata = { ...existing.metadata, ...(entity.metadata || {}) };
       if (!existing.description && entity.description) {
         existing.description = entity.description;
+      }
+      if (existing.technology === 'Generic' && entity.technology) {
+        existing.technology = entity.technology;
       }
     }
   });
@@ -56,6 +83,8 @@ export function reconstructArchitecture(input: ReconstructionInput): Architectur
           sourceEvidence: rel.sourceEvidence || {
             file: inputType === 'blueprint' ? 'blueprint.json' : 'extracted-manifest',
             description: `${rel.source} ${rel.type} ${rel.target}`,
+            method: 'Architecture Linker',
+            confidence: 'HIGH',
           },
           description: rel.description || `${rel.source} ${rel.type} ${rel.target}`,
         });
@@ -65,7 +94,7 @@ export function reconstructArchitecture(input: ReconstructionInput): Architectur
 
   // Calculate statistics (strictly Objective 1 reconstruction metrics)
   const stats: ArchitectureStats = {
-    services: normalizedEntities.filter((e) => e.type === 'Service').length,
+    services: normalizedEntities.filter((e) => e.type === 'Service' || e.type === 'Application').length,
     apis: normalizedEntities.filter((e) => e.type === 'API').length,
     databases: normalizedEntities.filter((e) => e.type === 'Database').length,
     modules: normalizedEntities.filter((e) => e.type === 'Module').length,
@@ -77,6 +106,54 @@ export function reconstructArchitecture(input: ReconstructionInput): Architectur
     userProvidedCount: normalizedEntities.filter((e) => e.source === 'User-provided').length,
   };
 
+  // Synthesize default blueprint inventory if none was provided
+  const finalInventory: CodebaseInventory = inventory || {
+    total_files: 1,
+    total_folders: 1,
+    total_lines: 50,
+    languages: { JSON: 1 },
+    frameworks: [],
+    categories_breakdown: { manifest: 1 },
+    manifests: ['blueprint.json'],
+    config_files: [],
+    modules: [],
+    packages: [],
+    libraries: [],
+    endpoints_count: stats.apis,
+    datastores_count: stats.databases,
+    external_integrations_count: stats.externalSystems,
+    files: [
+      {
+        path: 'blueprint.json',
+        name: 'blueprint.json',
+        category: 'manifest',
+        extension: '.json',
+        size_bytes: 2048,
+        lines_count: 50,
+        language: 'JSON',
+        analysis_status: 'Analyzed — architecture blueprint',
+      },
+    ],
+    folders: ['root'],
+    file_dependencies: [],
+    external_dependencies: [],
+    detection_summary: `Reconstructed ${normalizedEntities.length} architecture entities and ${normalizedRelationships.length} relationships from blueprint specification.`,
+    is_limited_architecture: isLimitedArchitecture,
+    limited_architecture_reason: limitedArchitectureReason,
+  };
+
+  const resolvedScope = scope || (isLimitedArchitecture && finalInventory.total_files <= 3 ? 'partial' : 'complete');
+
+  const resolvedIdentity: InputIdentity = inputIdentity || {
+    id: `input_${Math.random().toString(36).substring(2, 9)}_${Date.now()}`,
+    filename: sourceArtifacts[0] || `${systemName.toLowerCase().replace(/\s+/g, '_')}_spec`,
+    inputType,
+    uploadedAt: new Date().toISOString(),
+    filesCount: finalInventory.total_files,
+    foldersCount: finalInventory.total_folders,
+    scope: resolvedScope,
+  };
+
   return {
     systemName,
     version,
@@ -86,5 +163,13 @@ export function reconstructArchitecture(input: ReconstructionInput): Architectur
     entities: normalizedEntities,
     relationships: normalizedRelationships,
     stats,
+    inventory: finalInventory,
+    codebaseGraph,
+    isLimitedArchitecture,
+    limitedArchitectureReason,
+    inputIdentity: resolvedIdentity,
+    originalJsonPayload,
+    rawJsonString,
+    scope: resolvedScope,
   };
 }

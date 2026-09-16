@@ -1,4 +1,5 @@
 import type { ArchitectureModel } from '../types/architecture';
+import { SAMPLE_V1_INVENTORY } from './sampleEvolutions';
 
 export const DEMO_ARCHITECTURE: ArchitectureModel = {
   systemName: 'Cloud Retail Microservices Platform',
@@ -442,4 +443,5 @@ export const DEMO_ARCHITECTURE: ArchitectureModel = {
     detectedCount: 10,
     userProvidedCount: 2,
   },
+  inventory: SAMPLE_V1_INVENTORY,
 };

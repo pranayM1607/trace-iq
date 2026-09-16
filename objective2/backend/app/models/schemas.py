@@ -1,5 +1,9 @@
+import uuid
 from typing import List, Dict, Optional, Any, Literal
 from pydantic import BaseModel, Field
+
+def uuid_gen() -> str:
+    return uuid.uuid4().hex[:8]
 
 EntityType = Literal[
     'Service', 'API', 'Database', 'Module', 'Library', 'External System',
@@ -257,3 +261,45 @@ class Objective2AnalysisResult(BaseModel):
     complexity: ComplexityAnalysis
     component_risks: Dict[str, ComponentRiskSummary]
     top_insights: List[str]
+
+# Objective 3: Hypothetical Change Simulator & Causal Risk Ledger Schemas
+ProposedChangeAction = Literal['add_component', 'remove_component', 'add_dependency', 'remove_dependency']
+
+class ProposedChange(BaseModel):
+    id: str = Field(default_factory=lambda: f"chg-{uuid_gen()}")
+    action: ProposedChangeAction
+    component: Optional[ArchitectureEntity] = None
+    component_id: Optional[str] = None
+    relationship: Optional[ArchitectureRelationship] = None
+    relationship_id: Optional[str] = None
+    description: Optional[str] = None
+
+class CausalRiskFactorItem(BaseModel):
+    factor: str
+    points: float
+    description: str
+    evidenceCount: int = 0
+
+class ChangeStoryStep(BaseModel):
+    step: int
+    title: str
+    description: str
+    category: str = "Structural Evolution"
+
+class ChangeSimulationRequest(BaseModel):
+    current_architecture: ArchitectureModel
+    changes: List[ProposedChange]
+
+class ChangeSimulationResult(BaseModel):
+    current_architecture: ArchitectureModel
+    hypothetical_architecture: ArchitectureModel
+    current_analysis: Objective2AnalysisResult
+    hypothetical_analysis: Objective2AnalysisResult
+    directly_affected_nodes: List[ArchitectureEntity]
+    indirectly_affected_nodes: List[ArchitectureEntity]
+    propagation_paths: List[Dict[str, Any]]
+    current_risk_score: float
+    hypothetical_risk_score: float
+    risk_delta: float
+    causal_risk_ledger: List[CausalRiskFactorItem]
+    change_story: List[ChangeStoryStep]

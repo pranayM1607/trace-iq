@@ -19,12 +19,15 @@ import {
   Filter,
   Info,
   Maximize2,
+  AlertCircle,
 } from 'lucide-react';
 import type {
   ArchitectureEntity,
   ArchitectureRelationship,
   EntityType,
   RelationshipType,
+  DiffNodeItem,
+  DiffRelationshipItem,
 } from '../../types/architecture';
 import {
   computeBaseGraphLayout,
@@ -42,6 +45,13 @@ interface ArchitectureGraphProps {
   selectedEntityId: string | null;
   onSelectEntity: (entityId: string | null) => void;
   extractedAt?: string;
+  isLimitedArchitecture?: boolean;
+  limitedArchitectureReason?: string;
+  diffMode?: boolean;
+  diffNodesMap?: Map<string, DiffNodeItem>;
+  diffEdgesMap?: Map<string, DiffRelationshipItem>;
+  selectedEdgeId?: string | null;
+  onSelectEdge?: (edgeId: string | null) => void;
 }
 
 const nodeTypes = {
@@ -59,6 +69,7 @@ const edgeTypes = {
 
 const ENTITY_FILTER_OPTIONS: Array<{ label: string; value: EntityType | 'ALL' }> = [
   { label: 'All Entities', value: 'ALL' },
+  { label: 'Applications', value: 'Application' },
   { label: 'Services', value: 'Service' },
   { label: 'Databases', value: 'Database' },
   { label: 'APIs', value: 'API' },
@@ -73,6 +84,10 @@ const RELATIONSHIP_FILTER_OPTIONS: Array<{ label: string; value: RelationshipTyp
   { label: 'USES', value: 'USES' },
   { label: 'DEPENDS_ON', value: 'DEPENDS_ON' },
   { label: 'CONNECTS_TO', value: 'CONNECTS_TO' },
+  { label: 'IMPORTS', value: 'IMPORTS' },
+  { label: 'QUERIES', value: 'QUERIES' },
+  { label: 'LOADS', value: 'LOADS' },
+  { label: 'EXPOSES', value: 'EXPOSES' },
 ];
 
 const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
@@ -81,10 +96,19 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
   selectedEntityId,
   onSelectEntity,
   extractedAt,
+  isLimitedArchitecture,
+  limitedArchitectureReason,
+  diffMode = false,
+  diffNodesMap,
+  diffEdgesMap,
+  selectedEdgeId: externalSelectedEdgeId,
+  onSelectEdge,
 }) => {
   const { fitView, setCenter } = useReactFlow();
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedEdgeId, setSelectedEdgeId] = useState<string | null>(null);
+  const [internalSelectedEdgeId, setInternalSelectedEdgeId] = useState<string | null>(null);
+  const selectedEdgeId = externalSelectedEdgeId !== undefined ? externalSelectedEdgeId : internalSelectedEdgeId;
+
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<EntityType | 'ALL'>('ALL');
   const [selectedRelFilter, setSelectedRelFilter] = useState<RelationshipType | 'ALL'>('ALL');
   const [direction, setDirection] = useState<'LR' | 'TB'>('LR');
@@ -106,8 +130,21 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
       selectedTypeFilter,
       selectedRelFilter,
       searchTerm,
+      diffMode,
+      diffNodesMap,
+      diffEdgesMap,
     });
-  }, [baseLayout, selectedEntityId, selectedEdgeId, selectedTypeFilter, selectedRelFilter, searchTerm]);
+  }, [
+    baseLayout,
+    selectedEntityId,
+    selectedEdgeId,
+    selectedTypeFilter,
+    selectedRelFilter,
+    searchTerm,
+    diffMode,
+    diffNodesMap,
+    diffEdgesMap,
+  ]);
 
   const [, , onNodesChange] = useNodesState(visualGraph.nodes);
   const [, , onEdgesChange] = useEdgesState(visualGraph.edges);
@@ -148,7 +185,8 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
             duration: 500,
           });
           onSelectEntity(match.id);
-          setSelectedEdgeId(null);
+          if (onSelectEdge) onSelectEdge(null);
+          else setInternalSelectedEdgeId(null);
         }
       }
     }
@@ -157,30 +195,46 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
   const handleNodeClick = useCallback(
     (_: React.MouseEvent, node: Node) => {
       onSelectEntity(node.id);
-      setSelectedEdgeId(null);
+      if (onSelectEdge) {
+        onSelectEdge(null);
+      } else {
+        setInternalSelectedEdgeId(null);
+      }
     },
-    [onSelectEntity]
+    [onSelectEntity, onSelectEdge]
   );
 
   const handleEdgeClick = useCallback(
     (_: React.MouseEvent, edge: Edge) => {
-      setSelectedEdgeId(edge.id);
+      if (onSelectEdge) {
+        onSelectEdge(edge.id);
+      } else {
+        setInternalSelectedEdgeId(edge.id);
+      }
       onSelectEntity(null);
     },
-    [onSelectEntity]
+    [onSelectEntity, onSelectEdge]
   );
 
   const handlePaneClick = useCallback(() => {
     onSelectEntity(null);
-    setSelectedEdgeId(null);
-  }, [onSelectEntity]);
+    if (onSelectEdge) {
+      onSelectEdge(null);
+    } else {
+      setInternalSelectedEdgeId(null);
+    }
+  }, [onSelectEntity, onSelectEdge]);
 
   const handleResetView = () => {
     setSearchTerm('');
     setSelectedTypeFilter('ALL');
     setSelectedRelFilter('ALL');
     onSelectEntity(null);
-    setSelectedEdgeId(null);
+    if (onSelectEdge) {
+      onSelectEdge(null);
+    } else {
+      setInternalSelectedEdgeId(null);
+    }
     fitView({ padding: 0.08, duration: 450 });
   };
 
@@ -281,6 +335,17 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
 
       {/* Main Canvas Area */}
       <div className="flex-1 relative w-full h-full">
+        {/* Limited Architecture Detected Banner */}
+        {isLimitedArchitecture && (
+          <div className="absolute top-4 left-1/2 -translate-x-1/2 z-20 bg-amber-50/95 border border-amber-300 text-amber-900 rounded-xl px-4 py-2.5 shadow-md flex items-center gap-2.5 text-xs max-w-xl backdrop-blur-xs animate-in fade-in">
+            <AlertCircle className="w-4 h-4 text-amber-600 shrink-0" />
+            <div className="min-w-0">
+              <span className="font-bold mr-1.5">Limited Architecture Detected:</span>
+              <span className="text-amber-800">{limitedArchitectureReason || 'Single-file or minimal component boundaries.'}</span>
+            </div>
+          </div>
+        )}
+
         <ReactFlow
           nodes={visualGraph.nodes}
           edges={visualGraph.edges}
@@ -360,39 +425,61 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
               </button>
             </div>
 
-            <div className="space-y-1.5">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"></span>
-                <span className="text-[11px]">Service Component</span>
+            {diffMode ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0"></span>
+                  <span className="text-[11px] font-bold text-emerald-800">+ Added (V2 introduced)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-rose-600 shrink-0"></span>
+                  <span className="text-[11px] font-bold text-rose-800">- Removed (V1 decommissioned)</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 rounded-full bg-slate-400 shrink-0"></span>
+                  <span className="text-[11px] text-slate-600">= Unchanged</span>
+                </div>
+                <div className="mt-2 pt-2 border-t border-slate-100 text-[10px] text-slate-500 italic">
+                  Select any component or edge to inspect source provenance & diff details.
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0"></span>
-                <span className="text-[11px]">Database / Datastore</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-teal-600 shrink-0"></span>
-                <span className="text-[11px]">API Route / Gateway</span>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0"></span>
-                <span className="text-[11px]">External Third-Party</span>
-              </div>
-            </div>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"></span>
+                    <span className="text-[11px]">Service Component</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-600 shrink-0"></span>
+                    <span className="text-[11px]">Database / Datastore</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-teal-600 shrink-0"></span>
+                    <span className="text-[11px]">API Route / Gateway</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="w-2.5 h-2.5 rounded-full bg-amber-500 shrink-0"></span>
+                    <span className="text-[11px]">External Third-Party</span>
+                  </div>
+                </div>
 
-            <div className="mt-2.5 pt-2 border-t border-slate-100 space-y-1">
-              <div className="flex items-center justify-between text-[10px] text-slate-500">
-                <span className="font-mono text-blue-600 font-semibold">CALLS</span>
-                <span>Synchronous REST / gRPC</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-slate-500">
-                <span className="font-mono text-emerald-600 font-semibold">USES</span>
-                <span>Database / Cache Driver</span>
-              </div>
-              <div className="flex items-center justify-between text-[10px] text-slate-500">
-                <span className="font-mono text-purple-600 font-semibold">DEPENDS_ON</span>
-                <span>Docker / Module Import</span>
-              </div>
-            </div>
+                <div className="mt-2.5 pt-2 border-t border-slate-100 space-y-1">
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span className="font-mono text-blue-600 font-semibold">CALLS</span>
+                    <span>Synchronous REST / gRPC</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span className="font-mono text-emerald-600 font-semibold">USES</span>
+                    <span>Database / Cache Driver</span>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span className="font-mono text-purple-600 font-semibold">DEPENDS_ON</span>
+                    <span>Docker / Module Import</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 
