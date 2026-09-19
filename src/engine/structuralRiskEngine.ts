@@ -6,6 +6,7 @@ import type {
   StructuralRiskDelta,
   CausalRiskFactor,
 } from '../types/architecture';
+import { Objective2AnalysisEngine } from './objective2AnalysisEngine';
 
 /**
  * Computes graph-based impact analysis.
@@ -212,12 +213,52 @@ export function computeStructuralRiskDelta(
   original: ArchitectureModel,
   changed: ArchitectureModel,
   diff: ArchitectureDiff,
-  _impact: ImpactAnalysisResult
+  _impact?: ImpactAnalysisResult
 ): StructuralRiskDelta {
+  const origAnalysis = Objective2AnalysisEngine.analyzeArchitecture(original);
+  const chgAnalysis = Objective2AnalysisEngine.analyzeArchitecture(changed);
+  const origScore = Objective2AnalysisEngine.calculateDeterministicRiskScore(origAnalysis);
+  const chgScore = Objective2AnalysisEngine.calculateDeterministicRiskScore(chgAnalysis);
+  const origRiskLevel = Objective2AnalysisEngine.getRiskLevel(origScore);
+  const chgRiskLevel = Objective2AnalysisEngine.getRiskLevel(chgScore);
+
   const orig = calculateModelRiskScore(original);
   const chg = calculateModelRiskScore(changed);
 
   const ledger: CausalRiskFactor[] = [];
+  const changedEntityIds = new Set(changed.entities.map((e) => e.id));
+
+  // Itemize Broken Required Dependencies (Target removed while callers remain active)
+  const brokenDeps: Array<{ callerName: string; removedTargetName: string }> = [];
+  const removedNodeIds = new Set(diff.removedNodes.map((n) => n.id));
+
+  diff.removedNodes.forEach((removedNode) => {
+    const callersInOriginal = original.relationships
+      .filter((r) => r.target === removedNode.id)
+      .map((r) => r.source);
+
+    callersInOriginal.forEach((callerId) => {
+      if (changedEntityIds.has(callerId)) {
+        const callerEntity = changed.entities.find((e) => e.id === callerId) || original.entities.find((e) => e.id === callerId);
+        brokenDeps.push({
+          callerName: callerEntity?.name || callerId,
+          removedTargetName: removedNode.name,
+        });
+      }
+    });
+  });
+
+  if (brokenDeps.length > 0) {
+    const pts = brokenDeps.length * 15;
+    ledger.push({
+      factor: 'Broken Required Dependency Detected',
+      points: pts,
+      description: `Target component(s) removed while dependent caller(s) remain active: ${brokenDeps
+        .map((b) => `"${b.callerName}" missing "${b.removedTargetName}"`)
+        .join(', ')}. Raises severe structural breakage and unresolvability risk.`,
+      evidenceCount: brokenDeps.length,
+    });
+  }
 
   // Itemize Added Dependencies
   if (diff.addedRelationships.length > 0) {
@@ -230,14 +271,20 @@ export function computeStructuralRiskDelta(
     });
   }
 
-  // Itemize Removed Dependencies
-  if (diff.removedRelationships.length > 0) {
-    const pts = -1 * diff.removedRelationships.length * 3;
+  // Itemize Genuinely Decommissioned Dependencies (excluding edges where target was removed but caller remains broken)
+  const genuinePrunedEdges = diff.removedRelationships.filter((r) => {
+    const targetRemoved = removedNodeIds.has(r.relationship.target);
+    const callerSurvives = changedEntityIds.has(r.relationship.source);
+    return !(targetRemoved && callerSurvives);
+  });
+
+  if (genuinePrunedEdges.length > 0) {
+    const pts = -1 * genuinePrunedEdges.length * 3;
     ledger.push({
       factor: 'Decommissioned Obsolete Dependencies',
       points: pts,
-      description: `Removed ${diff.removedRelationships.length} legacy edge(s), reducing direct coupling.`,
-      evidenceCount: diff.removedRelationships.length,
+      description: `Safely pruned ${genuinePrunedEdges.length} retired dependency edge(s), reducing direct coupling.`,
+      evidenceCount: genuinePrunedEdges.length,
     });
   }
 
@@ -286,27 +333,27 @@ export function computeStructuralRiskDelta(
     });
   }
 
-  const rawDelta = chg.score - orig.score;
-  const ledgerSum = ledger.reduce((sum, item) => sum + item.points, 0);
-  const delta = ledgerSum !== 0 ? ledgerSum : rawDelta;
-  const finalChangedScore = Math.min(100, Math.max(0, orig.score + delta));
+  const delta = Number((chgScore - origScore).toFixed(1));
+  const shiftDirection: 'Higher structural risk' | 'Lower structural risk' | 'No structural risk change' =
+    delta > 0 ? 'Higher structural risk' : delta < 0 ? 'Lower structural risk' : 'No structural risk change';
 
   let attributionStatement: string;
   if (delta > 0) {
-    attributionStatement = `Structural risk increased by +${delta} points due to ${ledger
-      .filter((f) => f.points > 0)
-      .map((f) => f.factor.toLowerCase())
-      .join(', ')}.`;
+    const factors = ledger.filter((f) => f.points > 0).map((f) => f.factor.toLowerCase()).join(', ');
+    attributionStatement = `Higher structural risk: Net shift of +${delta} points (${origScore} [${origRiskLevel}] → ${chgScore} [${chgRiskLevel}])${factors ? ` due to ${factors}` : ''}.`;
   } else if (delta < 0) {
-    attributionStatement = `Structural risk reduced by ${delta} points through decoupling and component deprecation.`;
+    attributionStatement = `Lower structural risk: Net shift of ${delta} points (${origScore} [${origRiskLevel}] → ${chgScore} [${chgRiskLevel}]) through decoupling and architecture simplification.`;
   } else {
-    attributionStatement = 'Structural risk posture remains unchanged across versions.';
+    attributionStatement = `No structural risk change: Structural risk posture remains stable at ${origScore} [${origRiskLevel}].`;
   }
 
   return {
-    originalScore: orig.score,
-    changedScore: finalChangedScore,
+    originalScore: origScore,
+    changedScore: chgScore,
     delta,
+    originalRiskLevel: origRiskLevel,
+    changedRiskLevel: chgRiskLevel,
+    shiftDirection,
     ledger,
     attributionStatement,
   };

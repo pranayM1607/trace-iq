@@ -7,11 +7,11 @@ import {
   CheckCircle2,
   AlertTriangle,
   Network,
-  Camera,
   Boxes,
   Activity,
   GitCommit,
   Check,
+  ShieldCheck,
 } from 'lucide-react';
 import type {
   ArchitectureModel,
@@ -21,7 +21,6 @@ import type {
   ChangeSimulationResult,
   DiffNodeItem,
   DiffRelationshipItem,
-  ArchitectureSnapshot,
 } from '../../types/architecture';
 import type { NavRoute } from '../layout/Sidebar';
 import { ArchitectureGraph } from '../graph/ArchitectureGraph';
@@ -30,16 +29,12 @@ import { ChangeSimulatorEngine } from '../../engine/changeSimulatorEngine';
 
 interface ChangeSimulatorPageProps {
   model: ArchitectureModel;
-  snapshots: ArchitectureSnapshot[];
-  onNavigate: (route: NavRoute) => void;
-  onSaveSnapshot?: (label: string) => void;
+  onNavigate?: (route: NavRoute) => void;
 }
 
 export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
   model,
-  snapshots: _snapshots,
   onNavigate: _onNavigate,
-  onSaveSnapshot,
 }) => {
   // Staged changes list
   const [stagedChanges, setStagedChanges] = useState<ProposedChange[]>([]);
@@ -48,7 +43,6 @@ export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
   const [isSimulating, setIsSimulating] = useState(false);
   const [simulationResult, setSimulationResult] = useState<ChangeSimulationResult | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [savedSnapshotSuccess, setSavedSnapshotSuccess] = useState<string | null>(null);
 
   // Form input states
   const [changeType, setChangeType] = useState<
@@ -270,7 +264,6 @@ export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
 
     setIsSimulating(true);
     setErrorMessage(null);
-    setSavedSnapshotSuccess(null);
 
     try {
       let result: ChangeSimulationResult;
@@ -346,14 +339,6 @@ export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
 
     return { origDiffNodesMap: origNodes, origDiffEdgesMap: origEdges, simDiffNodesMap: simNodes, simDiffEdgesMap: simEdges };
   }, [simulationResult]);
-
-  // Handle Save as Snapshot
-  const handleSaveSimulatedSnapshot = () => {
-    if (!simulationResult || !onSaveSnapshot) return;
-    const label = `Simulated: ${stagedChanges.length} Change(s) [Risk ${simulationResult.hypothetical_risk_score}]`;
-    onSaveSnapshot(label);
-    setSavedSnapshotSuccess(`Successfully saved simulated architecture as snapshot: "${label}"`);
-  };
 
   const totalBlastRadius = simulationResult
     ? simulationResult.directly_affected_nodes.length + simulationResult.indirectly_affected_nodes.length
@@ -718,103 +703,164 @@ export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
         {/* Step 2: Simulation Results */}
         {simulationResult && (
           <div className="space-y-6">
-            {/* Success snapshot alert */}
-            {savedSnapshotSuccess && (
-              <div className="p-3 rounded-xl bg-emerald-50 border border-emerald-200 text-emerald-800 text-xs flex items-center gap-2 shadow-2xs">
-                <Check className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>{savedSnapshotSuccess}</span>
-              </div>
-            )}
-
-            {/* Risk Delta Metric Strip */}
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-              {/* Baseline Score */}
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">
-                  Baseline Risk Score
+            {/* 9-Point Change Simulation Intelligence Assessment */}
+            <div className="bg-white rounded-2xl border border-slate-200 shadow-xs p-5 space-y-4">
+              <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                <div className="flex items-center gap-2.5">
+                  <span className="p-2 rounded-xl bg-violet-100 text-violet-700">
+                    <ShieldCheck className="w-5 h-5" />
+                  </span>
+                  <div>
+                    <h2 className="text-sm font-bold text-slate-900">
+                      Comprehensive Change Simulation Assessment
+                    </h2>
+                    <p className="text-xs text-slate-500">
+                      Objective 3 evaluated impact across 9 core architectural dimensions.
+                    </p>
+                  </div>
                 </div>
-                <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
-                  {simulationResult.current_risk_score}
-                  <span className="text-xs text-slate-400 font-normal"> / 100</span>
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5">Current production architecture</div>
-              </div>
-
-              {/* Simulated Score */}
-              <div className="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs">
-                <div className="text-xs text-slate-500 font-bold uppercase tracking-wider">
-                  Simulated Risk Score
-                </div>
-                <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
-                  {simulationResult.hypothetical_risk_score}
-                  <span className="text-xs text-slate-400 font-normal"> / 100</span>
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5">With proposed modifications</div>
-              </div>
-
-              {/* Risk Delta */}
-              <div
-                className={`p-4 rounded-2xl border shadow-xs ${
-                  simulationResult.risk_delta > 0
-                    ? 'bg-rose-50/70 border-rose-200'
-                    : simulationResult.risk_delta < 0
-                    ? 'bg-emerald-50/70 border-emerald-200'
-                    : 'bg-slate-50 border-slate-200'
-                }`}
-              >
-                <div
-                  className={`text-xs font-bold uppercase tracking-wider ${
+                <div className="flex items-center gap-2">
+                  <span className={`px-2.5 py-1 rounded-full text-xs font-bold font-mono ${
                     simulationResult.risk_delta > 0
-                      ? 'text-rose-700'
+                      ? 'bg-rose-100 text-rose-800'
                       : simulationResult.risk_delta < 0
-                      ? 'text-emerald-700'
-                      : 'text-slate-600'
-                  }`}
-                >
-                  Risk Delta (Δ)
-                </div>
-                <div
-                  className={`text-2xl font-extrabold mt-1 font-mono ${
-                    simulationResult.risk_delta > 0
-                      ? 'text-rose-900'
-                      : simulationResult.risk_delta < 0
-                      ? 'text-emerald-900'
-                      : 'text-slate-900'
-                  }`}
-                >
-                  {simulationResult.risk_delta > 0
-                    ? `+${simulationResult.risk_delta}`
-                    : simulationResult.risk_delta}
-                  <span className="text-xs font-normal"> pts</span>
-                </div>
-                <div
-                  className={`text-[11px] font-semibold mt-0.5 ${
-                    simulationResult.risk_delta > 0
-                      ? 'text-rose-700'
-                      : simulationResult.risk_delta < 0
-                      ? 'text-emerald-700'
-                      : 'text-slate-500'
-                  }`}
-                >
-                  {simulationResult.risk_delta > 0
-                    ? '⚠ System structural risk elevated'
-                    : simulationResult.risk_delta < 0
-                    ? '✓ Resilience improved'
-                    : 'Risk posture unchanged'}
+                      ? 'bg-emerald-100 text-emerald-800'
+                      : 'bg-slate-100 text-slate-700'
+                  }`}>
+                    Net Shift: {simulationResult.risk_delta > 0 ? `+${simulationResult.risk_delta}` : simulationResult.risk_delta} pts
+                  </span>
                 </div>
               </div>
 
-              {/* Blast Radius */}
-              <div className="bg-white p-4 rounded-2xl border border-indigo-200 shadow-xs">
-                <div className="text-xs text-indigo-700 font-bold uppercase tracking-wider">
-                  Impact Blast Radius
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                {/* CHANGE STAGED */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    CHANGE STAGED
+                  </div>
+                  <div className="space-y-1 pt-1">
+                    {stagedChanges.map((c, i) => (
+                      <div key={i} className="text-xs font-semibold text-slate-800 truncate" title={c.description}>
+                        • {c.description}
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="text-2xl font-extrabold text-indigo-900 mt-1 font-mono">
-                  {totalBlastRadius}
-                  <span className="text-xs text-indigo-500 font-normal"> components</span>
+
+                {/* DIRECT EFFECTS */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    DIRECT EFFECTS
+                  </div>
+                  <div className="text-xs text-slate-700 pt-1">
+                    <span className="font-bold text-slate-900">{simulationResult.directly_affected_nodes.length} component(s)</span> directly modified:
+                    <div className="flex flex-wrap gap-1 mt-1">
+                      {simulationResult.directly_affected_nodes.map((n) => (
+                        <span key={n.id} className="px-1.5 py-0.5 rounded text-[10px] bg-white border border-slate-200 font-mono text-slate-700">
+                          {n.name}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-[11px] text-indigo-600 mt-0.5">
-                  Max depth: {maxPropagationDepth} hops
+
+                {/* BROKEN DEPENDENCIES */}
+                <div className={`p-3.5 rounded-xl border space-y-1 ${
+                  (simulationResult.broken_dependencies && simulationResult.broken_dependencies.length > 0)
+                    ? 'bg-rose-50/80 border-rose-200 text-rose-900'
+                    : 'bg-emerald-50/80 border-emerald-200 text-emerald-900'
+                }`}>
+                  <div className="text-[11px] font-bold uppercase tracking-wider flex items-center gap-1.5">
+                    <span>BROKEN DEPENDENCIES</span>
+                  </div>
+                  <div className="text-xs pt-1">
+                    {(simulationResult.broken_dependencies && simulationResult.broken_dependencies.length > 0) ? (
+                      <div className="space-y-1">
+                        <div className="font-bold text-rose-800">
+                          {simulationResult.broken_dependencies.length} Broken Required Dependency Link(s):
+                        </div>
+                        {simulationResult.broken_dependencies.map((b, i) => (
+                          <div key={i} className="text-[11px] font-mono text-rose-700">
+                            ⚠ "{b.callerName}" missing "{b.missingTargetName}"
+                          </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="text-emerald-700 font-semibold flex items-center gap-1.5">
+                        <Check className="w-3.5 h-3.5 text-emerald-600" />
+                        <span>None — All required dependencies remain resolved.</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* AFFECTED COMPONENTS */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    AFFECTED COMPONENTS
+                  </div>
+                  <div className="text-xs text-slate-700 pt-1">
+                    <span className="font-extrabold text-slate-900">{totalBlastRadius} total components</span> ({simulationResult.directly_affected_nodes.length} direct, {simulationResult.indirectly_affected_nodes.length} indirect ripple) over max <span className="font-bold">{maxPropagationDepth} hop(s)</span>.
+                  </div>
+                </div>
+
+                {/* RISK METRICS */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    RISK METRICS
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 pt-1 text-center font-mono">
+                    <div className="bg-white p-1.5 rounded border border-slate-200">
+                      <div className="text-[9px] text-slate-400 uppercase font-bold">Before</div>
+                      <div className="font-extrabold text-slate-800 text-sm">{simulationResult.current_risk_score}</div>
+                    </div>
+                    <div className="bg-white p-1.5 rounded border border-slate-200">
+                      <div className="text-[9px] text-slate-400 uppercase font-bold">After</div>
+                      <div className="font-extrabold text-slate-800 text-sm">{simulationResult.hypothetical_risk_score}</div>
+                    </div>
+                    <div className={`p-1.5 rounded border ${
+                      simulationResult.risk_delta > 0
+                        ? 'bg-rose-50 border-rose-200 text-rose-800'
+                        : simulationResult.risk_delta < 0
+                        ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                        : 'bg-slate-100 border-slate-200 text-slate-700'
+                    }`}>
+                      <div className="text-[9px] uppercase font-bold">Delta (Δ)</div>
+                      <div className="font-extrabold text-sm">
+                        {simulationResult.risk_delta > 0 ? `+${simulationResult.risk_delta}` : simulationResult.risk_delta}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* WHY RISK CHANGED */}
+                <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200/80 space-y-1">
+                  <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700 flex items-center gap-1.5">
+                    WHY RISK CHANGED
+                  </div>
+                  <div className="text-xs text-slate-700 leading-relaxed pt-1">
+                    {simulationResult.causal_risk_ledger.length > 0
+                      ? simulationResult.causal_risk_ledger[0].description
+                      : 'No structural risk regressions or improvements detected.'}
+                  </div>
+                </div>
+              </div>
+
+              {/* RECOMMENDED CHECKS */}
+              <div className="p-3.5 rounded-xl bg-violet-50/70 border border-violet-200 space-y-2">
+                <div className="text-xs font-bold text-violet-900 uppercase tracking-wider flex items-center gap-2">
+                  RECOMMENDED CHECKS
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-xs text-violet-950">
+                  {(simulationResult.recommended_checks && simulationResult.recommended_checks.length > 0
+                    ? simulationResult.recommended_checks
+                    : ['Verify end-to-end integration and run smoke test suite before deploying.']
+                  ).map((check, idx) => (
+                    <div key={idx} className="flex items-start gap-2 bg-white/80 p-2 rounded-lg border border-violet-100">
+                      <span className="text-violet-600 font-bold mt-0.5">•</span>
+                      <span className="leading-snug">{check}</span>
+                    </div>
+                  ))}
                 </div>
               </div>
             </div>
@@ -842,16 +888,6 @@ export const ChangeSimulatorPage: React.FC<ChangeSimulatorPageProps> = ({
                     <span className="w-2.5 h-2.5 rounded-sm bg-slate-300"></span>
                     <span>Unchanged</span>
                   </span>
-
-                  {onSaveSnapshot && (
-                    <button
-                      onClick={handleSaveSimulatedSnapshot}
-                      className="ml-2 px-3 py-1 bg-violet-50 hover:bg-violet-100 text-violet-700 font-bold border border-violet-200 rounded-lg flex items-center gap-1 transition-colors cursor-pointer text-xs"
-                    >
-                      <Camera className="w-3.5 h-3.5" />
-                      <span>Save as Snapshot</span>
-                    </button>
-                  )}
                 </div>
               </div>
 

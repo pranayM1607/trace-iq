@@ -2,7 +2,6 @@ import React from 'react';
 import {
   Layers,
   GitCompare,
-  History,
   Network,
   ArrowRightLeft,
   FolderTree,
@@ -18,7 +17,6 @@ import {
 export type NavRoute =
   | 'analyze'
   | 'compare'
-  | 'snapshots'
   | 'architecture'
   | 'dependencies'
   | 'inventory'
@@ -64,12 +62,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
           label: 'Compare',
           description: 'Dual-version architecture diff',
           icon: GitCompare,
-        },
-        {
-          id: 'snapshots' as NavRoute,
-          label: 'Snapshots',
-          description: 'Frozen immutable versions',
-          icon: History,
         },
       ],
     },

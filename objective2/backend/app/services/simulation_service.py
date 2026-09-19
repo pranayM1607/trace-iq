@@ -226,8 +226,34 @@ class SimulationService:
         # 6. Causal Risk Ledger (deterministic structural-risk attribution)
         causal_risk_ledger: List[CausalRiskFactorItem] = []
 
-        # (a) Dependency additions / removals
+        # (a) Broken Required Dependencies: Target removed while dependent callers remain
+        hypo_entity_ids = {e.id for e in hypo_entities}
+        broken_dependencies: List[tuple[str, str]] = []
+
+        for rem_ent in removed_entities_record:
+            callers = [
+                r.source for r in current_architecture.relationships
+                if r.target == rem_ent.id
+            ]
+            for caller_id in callers:
+                if caller_id in hypo_entity_ids:
+                    caller_name = all_known_entities.get(caller_id, ArchitectureEntity(id=caller_id, name=caller_id, type="Service")).name
+                    broken_dependencies.append((caller_name, rem_ent.name))
+
+        if broken_dependencies:
+            pts = round(len(broken_dependencies) * 15.0, 1)
+            broken_str = ", ".join([f'"{c}" missing "{t}"' for c, t in broken_dependencies])
+            causal_risk_ledger.append(CausalRiskFactorItem(
+                factor="Broken Required Dependency Detected",
+                points=pts,
+                description=f"Target component(s) removed while dependent caller(s) remain active: {broken_str}. Raises severe structural breakage and unresolvability risk.",
+                evidenceCount=len(broken_dependencies),
+            ))
+
+        # (b) Dependency additions / safe pruning
         delta_edges = len(hypothetical.relationships) - len(current_architecture.relationships)
+        net_pruned = max(0, abs(delta_edges) - len(broken_dependencies))
+
         if delta_edges > 0:
             causal_risk_ledger.append(CausalRiskFactorItem(
                 factor="Increased Outbound Coupling",
@@ -235,15 +261,15 @@ class SimulationService:
                 description=f"Added {delta_edges} new dependency link(s), increasing graph density and cross-service coordination overhead.",
                 evidenceCount=delta_edges,
             ))
-        elif delta_edges < 0:
+        elif net_pruned > 0 and not broken_dependencies:
             causal_risk_ledger.append(CausalRiskFactorItem(
                 factor="Reduced Dependency Coupling",
-                points=round(delta_edges * 3.5, 1),
-                description=f"Decommissioned {abs(delta_edges)} dependency edge(s), decoupling architecture subsystems.",
-                evidenceCount=abs(delta_edges),
+                points=round(-net_pruned * 3.5, 1),
+                description=f"Decommissioned {net_pruned} dependency edge(s), decoupling architecture subsystems.",
+                evidenceCount=net_pruned,
             ))
 
-        # (b) Single Points of Failure shifts
+        # (c) Single Points of Failure shifts
         curr_spofs = {s.component_id: s for s in current_analysis.spofs if s.is_spof}
         hypo_spofs = {s.component_id: s for s in hypothetical_analysis.spofs if s.is_spof}
         new_spofs = set(hypo_spofs.keys()) - set(curr_spofs.keys())
@@ -314,6 +340,11 @@ class SimulationService:
                 evidenceCount=0,
             ))
 
+        ledger_sum = round(sum(item.points for item in causal_risk_ledger), 1)
+        has_broken = any(item.factor == "Broken Required Dependency Detected" for item in causal_risk_ledger)
+        effective_delta = ledger_sum if has_broken else risk_delta
+        effective_hypo_risk = max(0.0, min(100.0, round(curr_risk + effective_delta, 1)))
+
         # 7. Change Story
         change_story: List[ChangeStoryStep] = []
         change_story.append(ChangeStoryStep(
@@ -339,8 +370,8 @@ class SimulationService:
             step=3,
             title="Structural Risk Shift",
             description=(
-                f"Modelled structural risk score transitioned from {curr_risk} to {hypo_risk} (Net Delta: {risk_delta:+0.1f}). "
-                f"{'Risk increased due to new architectural obligations.' if risk_delta > 0 else 'Risk reduced or preserved via architectural simplification.' if risk_delta < 0 else 'Risk posture remains neutral.'}"
+                f"Modelled structural risk score transitioned from {curr_risk} to {effective_hypo_risk} (Net Delta: {effective_delta:+0.1f}). "
+                f"{'Risk increased due to new architectural obligations or broken dependencies.' if effective_delta > 0 else 'Risk reduced or preserved via architectural simplification.' if effective_delta < 0 else 'Risk posture remains neutral.'}"
             ),
             category="Risk Delta",
         ))
@@ -362,8 +393,8 @@ class SimulationService:
             indirectly_affected_nodes=indirectly_affected_entities,
             propagation_paths=unique_propagation_paths,
             current_risk_score=curr_risk,
-            hypothetical_risk_score=hypo_risk,
-            risk_delta=risk_delta,
+            hypothetical_risk_score=effective_hypo_risk,
+            risk_delta=effective_delta,
             causal_risk_ledger=causal_risk_ledger,
             change_story=change_story,
         )

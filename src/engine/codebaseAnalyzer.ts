@@ -83,15 +83,321 @@ export function computeContentHash(content: string, sizeBytes?: number, isBinary
 }
 
 /**
+ * Helper to count opening and closing braces in a Java source line
+ * while ignoring braces inside double-quoted strings, char literals, and comments.
+ */
+function countBracesInJavaLine(
+  line: string,
+  state: { inString: boolean; inChar: boolean; inBlockComment: boolean }
+): { opens: number; closes: number } {
+  let opens = 0;
+  let closes = 0;
+  for (let c = 0; c < line.length; c++) {
+    const char = line[c];
+    const next = c + 1 < line.length ? line[c + 1] : '';
+
+    if (state.inBlockComment) {
+      if (char === '*' && next === '/') {
+        state.inBlockComment = false;
+        c++;
+      }
+      continue;
+    }
+
+    if (state.inString) {
+      if (char === '\\') {
+        c++; // skip escaped character
+      } else if (char === '"') {
+        state.inString = false;
+      }
+      continue;
+    }
+
+    if (state.inChar) {
+      if (char === '\\') {
+        c++; // skip escaped character
+      } else if (char === "'") {
+        state.inChar = false;
+      }
+      continue;
+    }
+
+    // Line comment: rest of line is ignored
+    if (char === '/' && next === '/') {
+      break;
+    }
+    // Block comment start
+    if (char === '/' && next === '*') {
+      state.inBlockComment = true;
+      c++;
+      continue;
+    }
+
+    // String literal start
+    if (char === '"') {
+      state.inString = true;
+      continue;
+    }
+    // Char literal start
+    if (char === "'") {
+      state.inChar = true;
+      continue;
+    }
+
+    if (char === '{') {
+      opens++;
+    } else if (char === '}') {
+      closes++;
+    }
+  }
+  return { opens, closes };
+}
+
+/**
+ * Extracts a complete logical Java method/endpoint block from source code.
+ * Scans upward to include preceding annotations (e.g. @GetMapping, @Transactional)
+ * and scans downward through matching balanced braces { ... }, ignoring string literals and comments.
+ */
+export function extractJavaMethodBlock(
+  content: string,
+  lineIdx: number
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  if (!content) return null;
+  const lines = content.split('\n');
+  if (lineIdx < 0 || lineIdx >= lines.length) return null;
+
+  // Scan upward from lineIdx to capture preceding annotations & doc comments
+  let startIdx = lineIdx;
+  while (startIdx > 0) {
+    const prevTrimmed = lines[startIdx - 1].trim();
+    if (
+      prevTrimmed.startsWith('@') ||
+      prevTrimmed.startsWith('//') ||
+      prevTrimmed.startsWith('*') ||
+      prevTrimmed.startsWith('/*')
+    ) {
+      startIdx--;
+    } else {
+      break;
+    }
+  }
+
+  // Scan downward to find the method opening brace '{' and its closing brace '}'
+  let endIdx = lineIdx;
+  let openBraceFound = false;
+  let braceCount = 0;
+  const parseState = { inString: false, inChar: false, inBlockComment: false };
+
+  for (let i = lineIdx; i < lines.length; i++) {
+    const { opens, closes } = countBracesInJavaLine(lines[i], parseState);
+    if (opens > 0) {
+      openBraceFound = true;
+    }
+    braceCount += opens;
+    braceCount -= closes;
+
+    if (openBraceFound && braceCount <= 0) {
+      endIdx = i;
+      break;
+    }
+    // Safety limit of 150 lines per method
+    if (i - lineIdx > 150) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  // If no braces (e.g. interface signature or abstract method), scan until semicolon ';'
+  if (!openBraceFound) {
+    for (let i = lineIdx; i < Math.min(lines.length, lineIdx + 10); i++) {
+      if (lines[i].includes(';')) {
+        endIdx = i;
+        break;
+      }
+    }
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
+ * Extracts a complete Java class declaration block including annotations and class header.
+ */
+export function extractJavaClassBlock(
+  content: string,
+  className: string
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  if (!content) return null;
+  const lines = content.split('\n');
+  const classLineIdx = lines.findIndex((l) =>
+    new RegExp(`\\b(?:class|interface|enum|record)\\s+${className}\\b`).test(l)
+  );
+  if (classLineIdx < 0) return null;
+
+  let startIdx = classLineIdx;
+  while (startIdx > 0) {
+    const prevTrimmed = lines[startIdx - 1].trim();
+    if (
+      prevTrimmed.startsWith('@') ||
+      prevTrimmed.startsWith('//') ||
+      prevTrimmed.startsWith('*') ||
+      prevTrimmed.startsWith('/*')
+    ) {
+      startIdx--;
+    } else {
+      break;
+    }
+  }
+
+  let endIdx = Math.min(lines.length - 1, classLineIdx + 25);
+  let braceCount = 0;
+  let openBraceFound = false;
+  const parseState = { inString: false, inChar: false, inBlockComment: false };
+
+  for (let i = classLineIdx; i < Math.min(lines.length, classLineIdx + 40); i++) {
+    const { opens, closes } = countBracesInJavaLine(lines[i], parseState);
+    if (opens > 0) {
+      openBraceFound = true;
+    }
+    braceCount += opens;
+    braceCount -= closes;
+
+    if (openBraceFound && braceCount <= 0) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
+ * Extracts a complete Python function block through its indented body,
+ * including preceding decorators (@route, etc.).
+ */
+export function extractPythonFunctionBlock(
+  content: string,
+  lineIdx: number
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  if (!content) return null;
+  const lines = content.split('\n');
+  if (lineIdx < 0 || lineIdx >= lines.length) return null;
+
+  // If lineIdx points to a decorator line (starts with @), locate the def line downward
+  let defIdx = lineIdx;
+  if (!/^\s*(?:async\s+)?def\s+/.test(lines[lineIdx])) {
+    for (let i = lineIdx; i < Math.min(lines.length, lineIdx + 10); i++) {
+      if (/^\s*(?:async\s+)?def\s+/.test(lines[i])) {
+        defIdx = i;
+        break;
+      }
+    }
+  }
+
+  // Scan upward from the starting point to capture preceding decorators & comments
+  let startIdx = Math.min(lineIdx, defIdx);
+  while (startIdx > 0) {
+    const prevTrimmed = lines[startIdx - 1].trim();
+    if (prevTrimmed.startsWith('@') || prevTrimmed.startsWith('#')) {
+      startIdx--;
+    } else {
+      break;
+    }
+  }
+
+  const defLine = lines[defIdx];
+  const baseIndent = defLine.search(/\S/);
+
+  let endIdx = defIdx;
+  for (let i = defIdx + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (!line.trim()) {
+      // Empty lines inside function are allowed, but do not update endIdx yet
+      continue;
+    }
+    const indent = line.search(/\S/);
+    if (indent <= baseIndent) {
+      // Reached next statement at equal or lesser indentation
+      break;
+    }
+    endIdx = i;
+    if (i - defIdx > 150) break;
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
+ * Extracts a complete configuration block from properties or yaml files.
+ */
+export function extractConfigBlock(
+  content: string,
+  lineIdx: number,
+  prefix?: string
+): { block: string; startLine: number; endLine: number; lineRange: string } {
+  if (!content) return { block: 'Exact source block unavailable.', startLine: 1, endLine: 1, lineRange: '1' };
+  const lines = content.split('\n');
+  if (lineIdx < 0 || lineIdx >= lines.length) {
+    return { block: 'Exact source block unavailable.', startLine: 1, endLine: 1, lineRange: '1' };
+  }
+
+  let startIdx = lineIdx;
+  let endIdx = lineIdx;
+
+  if (prefix) {
+    while (startIdx > 0 && lines[startIdx - 1].includes(prefix)) {
+      startIdx--;
+    }
+    while (endIdx < lines.length - 1 && lines[endIdx + 1].includes(prefix)) {
+      endIdx++;
+    }
+  } else {
+    startIdx = Math.max(0, lineIdx - 1);
+    endIdx = Math.min(lines.length - 1, lineIdx + 3);
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
  * Ingests a ZIP file, guarantees 100% file retention (Level 1),
  * decodes textual contents safely, and delegates to analyzeCodebaseFiles.
  */
-export async function analyzeCodebaseZip(zipFile: File | Blob): Promise<CodebaseAnalysisResult> {
+export async function analyzeCodebaseZip(zipFile: File | Blob | ArrayBuffer | Uint8Array | any): Promise<CodebaseAnalysisResult> {
   const zip = new JSZip();
   let zipContent: JSZip;
 
+  let inputData: any = zipFile;
+  if (zipFile && typeof (zipFile as any).arrayBuffer === 'function') {
+    try {
+      inputData = await (zipFile as any).arrayBuffer();
+    } catch {
+      inputData = zipFile;
+    }
+  }
+
   try {
-    zipContent = await zip.loadAsync(zipFile);
+    zipContent = await zip.loadAsync(inputData);
   } catch (err: any) {
     return {
       success: false,
@@ -204,7 +510,13 @@ export async function analyzeCodebaseZip(zipFile: File | Blob): Promise<Codebase
   );
 
   let commonPrefix = '';
-  if (rootCandidates.length === 1 && files.length > 0 && files.every((f) => f.path.startsWith(rootCandidates[0] + '/'))) {
+  const standardSourceDirs = ['src', 'app', 'lib', 'pkg', 'helpers', 'utils', 'components', 'pages', 'test', 'tests'];
+  if (
+    rootCandidates.length === 1 &&
+    files.length > 1 &&
+    !standardSourceDirs.includes(rootCandidates[0].toLowerCase()) &&
+    files.every((f) => f.path.startsWith(rootCandidates[0] + '/'))
+  ) {
     commonPrefix = rootCandidates[0] + '/';
   }
 
@@ -313,7 +625,9 @@ export function analyzeCodebaseFiles(
     evidenceSnippet: string,
     evidenceLine?: number,
     method = 'Source Code Extractor',
-    confidence: EvidenceConfidence = 'HIGH'
+    confidence: EvidenceConfidence = 'HIGH',
+    lineRange?: string,
+    lineEnd?: number
   ) {
     if (source === target) return;
     if (!relationships.some((r) => r.source === source && r.target === target && r.type === type)) {
@@ -326,11 +640,13 @@ export function analyzeCodebaseFiles(
         sourceEvidence: {
           file: evidenceFile,
           line: evidenceLine,
-          snippet: evidenceSnippet,
+          lineEnd,
+          lineRange: lineRange || (evidenceLine ? `${evidenceLine}` : undefined),
+          snippet: evidenceSnippet || 'Exact source block unavailable.',
           description: `${source} ${type} ${target} via ${protocol}`,
           method,
           confidence,
-          statement: evidenceSnippet.slice(0, 120),
+          statement: (evidenceSnippet || '').slice(0, 120),
         },
         description: `${source} ${type} ${target} via ${protocol}`,
       });
@@ -346,7 +662,28 @@ export function analyzeCodebaseFiles(
     fileByStem.set(stem, f.path);
   });
 
-  // 2. Scan Manifests & Orchestration (Docker Compose, package.json, requirements.txt, pom.xml, go.mod, Cargo.toml, pubspec.yaml)
+  // 1b. Pass 1: Pre-register components from declarations (Java, Go, etc.)
+  for (const file of files) {
+    const ext = getFileExtension(file.path);
+    if (ext === '.java') {
+      preRegisterJavaComponents(file, registerEntity);
+    }
+  }
+
+  // 2a. Scan Application Configuration / Spring Properties first
+  for (const file of files) {
+    const filename = file.path.toLowerCase();
+    if (
+      filename.endsWith('application.properties') ||
+      filename.endsWith('application.yml') ||
+      filename.endsWith('application.yaml')
+    ) {
+      manifestsFound.push(file.path);
+      parseSpringProperties(file, registerEntity, registerRel, entityMap);
+    }
+  }
+
+  // 2b. Scan Manifests & Orchestration (Docker Compose, package.json, requirements.txt, pom.xml, go.mod, Cargo.toml, pubspec.yaml)
   for (const file of files) {
     const filename = file.path.toLowerCase();
     if (filename.endsWith('docker-compose.yml') || filename.endsWith('docker-compose.yaml')) {
@@ -360,7 +697,7 @@ export function analyzeCodebaseFiles(
       parsePythonManifest(file, registerEntity, registerRel, externalDeps);
     } else if (filename.endsWith('pom.xml') || filename.endsWith('build.gradle')) {
       manifestsFound.push(file.path);
-      parseJavaManifest(file, registerEntity, registerRel, externalDeps);
+      parseJavaManifest(file, registerEntity, registerRel, externalDeps, entityMap);
     } else if (filename.endsWith('go.mod')) {
       manifestsFound.push(file.path);
       parseGoMod(file, registerEntity, registerRel, externalDeps);
@@ -444,7 +781,7 @@ export function analyzeCodebaseFiles(
     });
   }
 
-  // 6. Multi-Language Source Code Parsing & AST-Style Import Extraction
+  // 6. Pass 2: Multi-Language Source Code Parsing & Dependency Extraction
   for (const file of files) {
     const ext = getFileExtension(file.path);
     if (['.py', '.dart', '.js', '.ts', '.jsx', '.tsx', '.java', '.go', '.rs', '.cs', '.cpp', '.c', '.php', '.rb'].includes(ext)) {
@@ -693,6 +1030,9 @@ function parseSourceFile(
     file.content.includes('FastAPI(') ||
     file.content.includes('Flask('));
 
+  const javaClassMatch = ext === '.java' ? file.content.match(/\b(?:public\s+)?(?:class|interface)\s+([A-Za-z0-9_]+)/) : null;
+  const javaClassId = javaClassMatch ? sanitizeId(javaClassMatch[1]) : null;
+
   let currentServiceId: string;
   if (isFrontendOrExtension && chromeExtensionId) {
     currentServiceId = chromeExtensionId;
@@ -700,6 +1040,8 @@ function parseSourceFile(
     currentServiceId = streamlitAppId;
   } else if (flutterAppId && isDart) {
     currentServiceId = flutterAppId;
+  } else if (javaClassId && entityMap.has(javaClassId)) {
+    currentServiceId = javaClassId;
   } else if (!isTestFile && isServiceNamed) {
     currentServiceId = sanitizeId(`${fileStem}-service`);
     if (!entityMap.has(currentServiceId)) {
@@ -728,6 +1070,9 @@ function parseSourceFile(
       });
     }
   } else {
+    if (ext === '.java') {
+      return;
+    }
     currentServiceId = findEnclosingServiceId(file.path, entityMap) || 'backend-api';
     if (!isTestFile && !entityMap.has(currentServiceId)) {
       const stem = getParentFolder(file.path) || 'Backend Service';
@@ -884,6 +1229,12 @@ function parseSourceFile(
       if (flaskRouteMatch) {
         const endpoint = flaskRouteMatch[1];
         const apiId = sanitizeId(`api-${endpoint}`);
+        const pyBlock = extractPythonFunctionBlock(file.content, i);
+        const codeSnippet = pyBlock ? pyBlock.block : trimmed;
+        const startL = pyBlock ? pyBlock.startLine : lineNum;
+        const endL = pyBlock ? pyBlock.endLine : lineNum;
+        const lRange = pyBlock ? pyBlock.lineRange : `${lineNum}`;
+
         registerEntity({
           id: apiId,
           name: endpoint,
@@ -891,9 +1242,31 @@ function parseSourceFile(
           technology: 'Flask / REST Endpoint',
           source: 'Detected',
           description: `HTTP API route exposed in ${file.path}`,
-          metadata: { filePath: file.path, endpoint },
+          metadata: { filePath: file.path, endpoint, line: startL, endLine: endL, lineRange: lRange, snippet: codeSnippet },
+          sourceEvidence: {
+            file: file.path,
+            line: startL,
+            lineEnd: endL,
+            lineRange: lRange,
+            snippet: codeSnippet,
+            description: `HTTP API route "${endpoint}" exposed in ${file.path}`,
+            method: 'Python Function AST Parser',
+            confidence: 'HIGH',
+          },
         });
-        registerRel(currentServiceId, apiId, 'EXPOSES', 'HTTP Endpoint', file.path, trimmed, lineNum, 'Route Decorator Extractor', 'HIGH');
+        registerRel(
+          currentServiceId,
+          apiId,
+          'EXPOSES',
+          'HTTP Endpoint',
+          file.path,
+          codeSnippet,
+          startL,
+          'Route Decorator Extractor',
+          'HIGH',
+          lRange,
+          endL
+        );
       }
 
       // Detect Model Loading: pickle.load / joblib.load
@@ -1000,9 +1373,178 @@ function parseSourceFile(
           technology: 'REST API Route',
           source: 'Detected',
           description: `REST endpoint in ${file.path}`,
-          metadata: { filePath: file.path, method, endpoint },
+          metadata: { filePath: file.path, method, endpoint, line: lineNum, snippet: trimmed },
         });
         registerRel(currentServiceId, apiId, 'EXPOSES', 'Internal Route', file.path, trimmed, lineNum, 'Express Route Extractor', 'HIGH');
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // D. Java / Spring Boot Dependency & Route Resolution
+    // ------------------------------------------------------------------
+    if (ext === '.java') {
+      // 1. File-level imports
+      const javaImportMatch = trimmed.match(/^import\s+([a-zA-Z0-9_\.]+);/);
+      if (javaImportMatch) {
+        const fullClass = javaImportMatch[1];
+        const simpleName = fullClass.split('.').pop() || '';
+        const simpleStem = simpleName.toLowerCase();
+
+        if (fileByStem.has(simpleStem)) {
+          const targetPath = fileByStem.get(simpleStem)!;
+          if (targetPath !== file.path) {
+            fileDeps.push({
+              id: `fdep-${file.path}-${targetPath}-${lineNum}`,
+              source_file: file.path,
+              target_file: targetPath,
+              type: 'IMPORTS',
+              line: lineNum,
+              snippet: trimmed,
+              statement: trimmed,
+              detectionMethod: 'Java Import Parser',
+              confidence: 'HIGH',
+            });
+          }
+        }
+      }
+
+      // 2. Spring MVC Route endpoints (only method endpoints inside the class)
+      const classDeclIndex = file.content.search(/\b(?:class|interface)\b/);
+      const currentPos = file.content.indexOf(trimmed);
+      const isBeforeClass = classDeclIndex !== -1 && currentPos !== -1 && currentPos < classDeclIndex;
+
+      const springRouteMatch = trimmed.match(/@(GetMapping|PostMapping|PutMapping|DeleteMapping|PatchMapping|RequestMapping)\s*(?:\(\s*(?:value\s*=\s*)?["']([^"']+)["']|\(\s*["']([^"']+)["']|\(\s*\))?/);
+      if (springRouteMatch && !isBeforeClass && !trimmed.startsWith('//') && !trimmed.startsWith('*')) {
+        const rawVerb = springRouteMatch[1];
+        const verbMap: Record<string, string> = {
+          GetMapping: 'GET',
+          PostMapping: 'POST',
+          PutMapping: 'PUT',
+          DeleteMapping: 'DELETE',
+          PatchMapping: 'PATCH',
+          RequestMapping: 'REQUEST',
+        };
+        const httpVerb = verbMap[rawVerb] || 'GET';
+        const rawRoute = springRouteMatch[2] || springRouteMatch[3] || '';
+
+        // Extract class-level @RequestMapping if present
+        let classPrefix = '';
+        const classReqMatch = file.content.match(/@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']+)["']/);
+        if (classReqMatch) {
+          classPrefix = classReqMatch[1].replace(/\/$/, '');
+        }
+
+        let fullRoute = rawRoute;
+        if (classPrefix) {
+          fullRoute = rawRoute.startsWith('/') ? `${classPrefix}${rawRoute}` : rawRoute ? `${classPrefix}/${rawRoute}` : classPrefix;
+        } else if (!fullRoute.startsWith('/')) {
+          fullRoute = `/${fullRoute}`;
+        }
+        if (!fullRoute) fullRoute = '/';
+
+        const displayVerb = httpVerb === 'REQUEST' ? 'GET' : httpVerb;
+        const apiId = sanitizeId(`api-${displayVerb}-${fullRoute}`);
+        const methodBlock = extractJavaMethodBlock(file.content, i);
+        const codeSnippet = methodBlock ? methodBlock.block : trimmed;
+        const startL = methodBlock ? methodBlock.startLine : lineNum;
+        const endL = methodBlock ? methodBlock.endLine : lineNum;
+        const lRange = methodBlock ? methodBlock.lineRange : `${lineNum}`;
+
+        if (!entityMap.has(apiId)) {
+          registerEntity({
+            id: apiId,
+            name: `${displayVerb} ${fullRoute}`,
+            type: 'API',
+            technology: 'Spring MVC / REST Endpoint',
+            source: 'Detected',
+            description: `HTTP ${displayVerb} route exposed in ${file.path}`,
+            metadata: {
+              filePath: file.path,
+              endpoint: fullRoute,
+              httpMethod: displayVerb,
+              line: startL,
+              endLine: endL,
+              lineRange: lRange,
+              snippet: codeSnippet,
+            },
+            sourceEvidence: {
+              file: file.path,
+              line: startL,
+              lineEnd: endL,
+              lineRange: lRange,
+              snippet: codeSnippet,
+              description: `HTTP ${displayVerb} route "${fullRoute}" defined in ${file.path}`,
+              method: 'Annotation & AST Pattern Parser',
+              confidence: 'HIGH',
+            },
+          });
+        }
+        registerRel(
+          currentServiceId,
+          apiId,
+          'EXPOSES',
+          'HTTP Endpoint',
+          file.path,
+          codeSnippet,
+          startL,
+          'Spring Route Extractor',
+          'HIGH',
+          lRange,
+          endL
+        );
+      }
+
+      // 3. Dependency Injection & Service / Repo Wiring
+      if (!trimmed.startsWith('package ') && !trimmed.startsWith('import ') && !trimmed.startsWith('@')) {
+        entityMap.forEach((targetEntity, targetId) => {
+          if (targetId !== currentServiceId && (targetEntity.type === 'Service' || targetEntity.type === 'Module')) {
+            const typeName = targetEntity.metadata?.className || targetEntity.name;
+            const escaped = typeName.replace(/[-\/\\^$*+?.()|[\]{}]/g, '\\$&');
+            const typeRefRegex = new RegExp(`\\b${escaped}\\b`);
+            if (typeRefRegex.test(trimmed)) {
+              const currentEntity = entityMap.get(currentServiceId);
+              const isCallerController = currentEntity?.metadata?.role === 'controller' || currentEntity?.name.endsWith('Controller');
+              const isTargetRepo = targetEntity.metadata?.role === 'repository' || targetEntity.name.endsWith('Repo') || targetEntity.name.endsWith('Repository');
+
+              const relType: RelationshipType = isCallerController ? 'CALLS' : isTargetRepo ? 'USES' : 'CALLS';
+              const protocol = isCallerController
+                ? 'Spring @Autowired / Dependency Injection'
+                : isTargetRepo
+                ? 'Spring Data JPA Injection'
+                : 'Java Method Call';
+
+              registerRel(
+                currentServiceId,
+                targetId,
+                relType,
+                protocol,
+                file.path,
+                trimmed,
+                lineNum,
+                'Spring Dependency Injection Extractor',
+                'HIGH'
+              );
+            }
+          }
+        });
+      }
+
+      // 4. Spring Data JPA Repository -> Database Link
+      if (trimmed.includes('extends JpaRepository') || trimmed.includes('extends CrudRepository')) {
+        const dbEntities = entitiesList(entityMap).filter((e) => e.type === 'Database');
+        dbEntities.forEach((db) => {
+          registerRel(
+            currentServiceId,
+            db.id,
+            'QUERIES',
+            'Spring Data JPA / Hibernate',
+            file.path,
+            trimmed,
+            lineNum,
+            'Spring Data JPA Extractor',
+            'HIGH'
+          );
+        });
       }
     }
   }
@@ -1335,7 +1877,8 @@ function parseJavaManifest(
   file: FileRecord,
   registerEntity: (e: ArchitectureEntity) => void,
   registerRel: (...args: any[]) => void,
-  _externalDeps: ExternalDependencyItem[]
+  _externalDeps: ExternalDependencyItem[],
+  entityMap?: Map<string, ArchitectureEntity>
 ) {
   const serviceName = extractServiceNameFromPath(file.path) || 'spring-boot-service';
   const serviceId = sanitizeId(serviceName);
@@ -1343,28 +1886,195 @@ function parseJavaManifest(
 
   const isSpringBoot = content.includes('spring-boot') || content.includes('org.springframework');
 
-  registerEntity({
-    id: serviceId,
-    name: formatComponentName(serviceName),
-    type: 'Service',
-    technology: isSpringBoot ? 'Java / Spring Boot' : 'Java',
-    source: 'Detected',
-    description: `Java service discovered in ${file.path}`,
-    metadata: { filePath: file.path, language: 'Java', buildTool: file.path.endsWith('.xml') ? 'Maven' : 'Gradle' },
-  });
-
-  if (content.includes('postgresql') || content.includes('spring-boot-starter-data-jpa')) {
-    const dbId = 'postgres-db';
+  // If specific Java service components (like Controllers or Services) are already registered,
+  // we do not create a generic duplicate service node for the root folder.
+  const hasSpecificJavaEntities = entityMap && entitiesList(entityMap).some((e) => e.metadata?.language === 'Java' && e.id !== serviceId);
+  if (!hasSpecificJavaEntities) {
     registerEntity({
-      id: dbId,
-      name: 'PostgreSQL Database',
-      type: 'Database',
-      technology: 'PostgreSQL / Hibernate',
+      id: serviceId,
+      name: formatComponentName(serviceName),
+      type: 'Service',
+      technology: isSpringBoot ? 'Java / Spring Boot' : 'Java',
       source: 'Detected',
-      description: 'Spring Data JPA / PostgreSQL driver in pom.xml',
-      metadata: { filePath: file.path },
+      description: `Java service discovered in ${file.path}`,
+      metadata: { filePath: file.path, language: 'Java', buildTool: file.path.endsWith('.xml') ? 'Maven' : 'Gradle' },
     });
-    registerRel(serviceId, dbId, 'USES', 'JDBC / Hibernate', file.path, 'pom.xml dependencies', undefined, 'Java Manifest Parser', 'HIGH');
+  }
+
+  // Database detection from dependencies: only if not already detected from properties/yml
+  const hasExistingDb = entityMap && entitiesList(entityMap).some((e) => e.type === 'Database');
+  if (!hasExistingDb) {
+    if (content.includes('mysql-connector-j') || content.includes('mysql-connector-java')) {
+      const dbId = 'mysql-db';
+      registerEntity({
+        id: dbId,
+        name: 'MySQL Database',
+        type: 'Database',
+        technology: 'MySQL / Hibernate',
+        source: 'Detected',
+        description: 'Spring Data JPA / MySQL driver in pom.xml',
+        metadata: { filePath: file.path },
+      });
+      registerRel(serviceId, dbId, 'USES', 'JDBC / Hibernate', file.path, 'pom.xml dependencies', undefined, 'Java Manifest Parser', 'HIGH');
+    } else if (content.includes('postgresql')) {
+      const dbId = 'postgres-db';
+      registerEntity({
+        id: dbId,
+        name: 'PostgreSQL Database',
+        type: 'Database',
+        technology: 'PostgreSQL / Hibernate',
+        source: 'Detected',
+        description: 'Spring Data JPA / PostgreSQL driver in pom.xml',
+        metadata: { filePath: file.path },
+      });
+      registerRel(serviceId, dbId, 'USES', 'JDBC / Hibernate', file.path, 'pom.xml dependencies', undefined, 'Java Manifest Parser', 'HIGH');
+    }
+  }
+}
+
+function parseSpringProperties(
+  file: FileRecord,
+  registerEntity: (e: ArchitectureEntity) => void,
+  _registerRel: (...args: any[]) => void,
+  _entityMap?: Map<string, ArchitectureEntity>
+) {
+  const content = file.content;
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i].trim();
+    if (line.startsWith('#') || !line) continue;
+
+    // Match jdbc:mysql://localhost:3306/student or url: jdbc:...
+    const dsMatch = line.match(/(?:spring\.datasource\.url\s*=\s*|url:\s*)jdbc:([a-zA-Z0-9]+):\/\/[^\/]+\/([a-zA-Z0-9_\-]+)/i);
+    if (dsMatch) {
+      const dbTypeRaw = dsMatch[1].toLowerCase();
+      const dbName = dsMatch[2];
+      let engineName = 'Relational';
+      if (dbTypeRaw === 'mysql') engineName = 'MySQL';
+      else if (dbTypeRaw === 'postgresql' || dbTypeRaw === 'postgres') engineName = 'PostgreSQL';
+      else if (dbTypeRaw === 'oracle') engineName = 'Oracle';
+      else if (dbTypeRaw === 'sqlserver') engineName = 'SQL Server';
+      else if (dbTypeRaw === 'h2') engineName = 'H2';
+
+      const dbId = sanitizeId(`${dbTypeRaw}-database-${dbName}`);
+      const cfgBlock = extractConfigBlock(file.content, i, 'datasource');
+      registerEntity({
+        id: dbId,
+        name: `${engineName} Database (${dbName})`,
+        type: 'Database',
+        technology: `${engineName} / Spring Data JPA`,
+        source: 'Detected',
+        description: `Spring Boot datasource connected to ${engineName} database "${dbName}"`,
+        metadata: {
+          filePath: file.path,
+          url: line,
+          dbEngine: engineName,
+          databaseName: dbName,
+          line: cfgBlock.startLine,
+          endLine: cfgBlock.endLine,
+          lineRange: cfgBlock.lineRange,
+          snippet: cfgBlock.block,
+        },
+        sourceEvidence: {
+          file: file.path,
+          line: cfgBlock.startLine,
+          lineEnd: cfgBlock.endLine,
+          lineRange: cfgBlock.lineRange,
+          snippet: cfgBlock.block,
+          description: `Spring Boot datasource configuration in ${file.path}`,
+          method: 'Configuration Parser',
+          confidence: 'HIGH',
+        },
+      });
+    }
+  }
+}
+
+function preRegisterJavaComponents(
+  file: FileRecord,
+  registerEntity: (e: ArchitectureEntity) => void
+) {
+  if (file.isBinary) return;
+  const content = file.content;
+  const lowerPath = file.path.toLowerCase();
+  if (lowerPath.includes('/test/') || lowerPath.startsWith('test/')) return;
+
+  const classMatch = content.match(/\b(?:public\s+)?(?:class|interface)\s+([A-Za-z0-9_]+)/);
+  if (!classMatch) return;
+  const className = classMatch[1];
+  const classId = sanitizeId(className);
+
+  const isRestController = content.includes('@RestController') || content.includes('@Controller') || className.endsWith('Controller');
+  const isService = content.includes('@Service') || className.endsWith('Service');
+  const isRepo = content.includes('@Repository') || content.includes('extends JpaRepository') || content.includes('extends CrudRepository') || className.endsWith('Repo') || className.endsWith('Repository');
+
+  const classBlock = extractJavaClassBlock(content, className);
+  const snippet = classBlock ? classBlock.block : 'Exact source block unavailable.';
+  const startL = classBlock ? classBlock.startLine : 1;
+  const endL = classBlock ? classBlock.endLine : 1;
+  const lRange = classBlock ? classBlock.lineRange : `${startL}`;
+
+  if (isRestController) {
+    registerEntity({
+      id: classId,
+      name: className,
+      type: 'Service',
+      technology: 'Java / Spring Boot REST Controller',
+      source: 'Detected',
+      description: `Spring Boot REST Controller handling web requests in ${file.path}`,
+      metadata: { filePath: file.path, className, role: 'controller', language: 'Java', line: startL, endLine: endL, lineRange: lRange, snippet },
+      sourceEvidence: {
+        file: file.path,
+        line: startL,
+        lineEnd: endL,
+        lineRange: lRange,
+        snippet,
+        description: `Spring Boot REST Controller "${className}" in ${file.path}`,
+        method: 'Class Declaration Parser',
+        confidence: 'HIGH',
+      },
+    });
+  } else if (isService) {
+    registerEntity({
+      id: classId,
+      name: className,
+      type: 'Service',
+      technology: 'Java / Spring Boot Service',
+      source: 'Detected',
+      description: `Spring Boot service business logic component in ${file.path}`,
+      metadata: { filePath: file.path, className, role: 'service', language: 'Java', line: startL, endLine: endL, lineRange: lRange, snippet },
+      sourceEvidence: {
+        file: file.path,
+        line: startL,
+        lineEnd: endL,
+        lineRange: lRange,
+        snippet,
+        description: `Spring Boot service component "${className}" in ${file.path}`,
+        method: 'Class Declaration Parser',
+        confidence: 'HIGH',
+      },
+    });
+  } else if (isRepo) {
+    registerEntity({
+      id: classId,
+      name: className,
+      type: 'Service',
+      technology: 'Spring Data JPA Repository',
+      source: 'Detected',
+      description: `Spring Data JPA data access repository in ${file.path}`,
+      metadata: { filePath: file.path, className, role: 'repository', language: 'Java', line: startL, endLine: endL, lineRange: lRange, snippet },
+      sourceEvidence: {
+        file: file.path,
+        line: startL,
+        lineEnd: endL,
+        lineRange: lRange,
+        snippet,
+        description: `Spring Data JPA repository "${className}" in ${file.path}`,
+        method: 'Class Declaration Parser',
+        confidence: 'HIGH',
+      },
+    });
   }
 }
 

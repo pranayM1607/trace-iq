@@ -17,6 +17,16 @@ import type {
  */
 export class Objective2AnalysisEngine {
   /**
+   * Translates a numerical structural risk score (0-100) into a standardized RiskLevel tier.
+   */
+  static getRiskLevel(score: number): RiskLevel {
+    if (score >= 70) return 'CRITICAL';
+    if (score >= 50) return 'HIGH';
+    if (score >= 30) return 'MEDIUM';
+    return 'LOW';
+  }
+
+  /**
    * Calculates reproducible composite structural risk score (0 - 100).
    * Strictly deterministic from graph metrics; no LLM or random noise.
    */

@@ -97,11 +97,15 @@ export function getCanonicalFileKey(fileOrPath: InventoryFile | string): string 
  * Detects if all files share a common single root directory prefix.
  */
 function detectCommonFolderPrefix(files: InventoryFile[]): string {
-  if (files.length === 0) return '';
+  if (files.length <= 1) return '';
   const firstPath = getCanonicalFileKey(files[0]);
   const firstSlash = firstPath.indexOf('/');
   if (firstSlash <= 0) return '';
   const candidate = firstPath.slice(0, firstSlash + 1);
+  const standardSourceDirs = ['src/', 'app/', 'lib/', 'pkg/', 'helpers/', 'utils/', 'components/', 'pages/', 'test/', 'tests/'];
+  if (standardSourceDirs.includes(candidate.toLowerCase())) {
+    return '';
+  }
   if (files.every((f) => getCanonicalFileKey(f).startsWith(candidate))) {
     return candidate;
   }
@@ -247,6 +251,24 @@ export function computeRepositoryInventoryDiff(
         versionOrigin: 'V1',
       });
     }
+  });
+
+  // Sort diffFiles and diffFolders so actionable changes (removed, added, modified) appear before unchanged
+  const sortPriority: Record<'removed' | 'added' | 'modified' | 'unchanged', number> = {
+    removed: 1,
+    added: 2,
+    modified: 3,
+    unchanged: 4,
+  };
+  diffFiles.sort((a, b) => {
+    const pDiff = (sortPriority[a.changeType] || 99) - (sortPriority[b.changeType] || 99);
+    if (pDiff !== 0) return pDiff;
+    return a.file.path.localeCompare(b.file.path);
+  });
+  diffFolders.sort((a, b) => {
+    const pDiff = (sortPriority[a.changeType] || 99) - (sortPriority[b.changeType] || 99);
+    if (pDiff !== 0) return pDiff;
+    return a.folder.localeCompare(b.folder);
   });
 
   return {

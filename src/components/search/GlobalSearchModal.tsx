@@ -6,15 +6,14 @@ import {
   ArrowRightLeft,
   FileCode,
   FileCheck2,
-  History,
   ChevronRight,
 } from 'lucide-react';
-import type { ArchitectureModel, ArchitectureSnapshot } from '../../types/architecture';
+import type { ArchitectureModel } from '../../types/architecture';
 import type { NavRoute } from '../layout/Sidebar';
 
 interface SearchResultItem {
   id: string;
-  category: 'component' | 'dependency' | 'file' | 'evidence' | 'snapshot';
+  category: 'component' | 'dependency' | 'file' | 'evidence';
   title: string;
   subtitle: string;
   badge: string;
@@ -29,7 +28,6 @@ interface GlobalSearchModalProps {
   isOpen: boolean;
   onClose: () => void;
   model: ArchitectureModel;
-  snapshots: ArchitectureSnapshot[];
   onNavigate: (route: NavRoute) => void;
   onSelectEntity?: (id: string) => void;
   onSelectEdge?: (id: string) => void;
@@ -39,7 +37,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
   isOpen,
   onClose,
   model,
-  snapshots,
   onNavigate,
   onSelectEntity,
   onSelectEdge,
@@ -139,21 +136,8 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
       }
     });
 
-    // 5. Saved Snapshots
-    snapshots.forEach((snap) => {
-      items.push({
-        id: `snap-${snap.id}`,
-        category: 'snapshot',
-        title: snap.label,
-        subtitle: `v${snap.architecture.version} • ${snap.architecture.entities.length} components • ${snap.createdAt}`,
-        badge: 'SNAPSHOT',
-        badgeColor: 'bg-amber-50 text-amber-700 border border-amber-200',
-        targetRoute: 'snapshots',
-      });
-    });
-
     return items;
-  }, [model, snapshots]);
+  }, [model]);
 
   // Filter and search
   const filteredResults = useMemo(() => {
@@ -223,7 +207,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
             { id: 'dependency', label: 'Dependencies' },
             { id: 'file', label: 'Files' },
             { id: 'evidence', label: 'Evidence' },
-            { id: 'snapshot', label: 'Snapshots' },
           ].map((f) => (
             <button
               key={f.id}
@@ -258,7 +241,6 @@ export const GlobalSearchModal: React.FC<GlobalSearchModalProps> = ({
                     {item.category === 'dependency' && <ArrowRightLeft className="w-4 h-4 text-indigo-600" />}
                     {item.category === 'file' && <FileCode className="w-4 h-4 text-slate-600" />}
                     {item.category === 'evidence' && <FileCheck2 className="w-4 h-4 text-emerald-600" />}
-                    {item.category === 'snapshot' && <History className="w-4 h-4 text-amber-600" />}
                   </div>
                   <div className="min-w-0">
                     <div className="text-xs font-bold text-slate-900 truncate group-hover:text-violet-700">

@@ -52,6 +52,8 @@ interface ArchitectureGraphProps {
   diffEdgesMap?: Map<string, DiffRelationshipItem>;
   selectedEdgeId?: string | null;
   onSelectEdge?: (edgeId: string | null) => void;
+  zoomOnScroll?: boolean;
+  preventScrolling?: boolean;
 }
 
 const nodeTypes = {
@@ -103,6 +105,8 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
   diffEdgesMap,
   selectedEdgeId: externalSelectedEdgeId,
   onSelectEdge,
+  zoomOnScroll,
+  preventScrolling,
 }) => {
   const { fitView, setCenter } = useReactFlow();
   const [searchTerm, setSearchTerm] = useState('');
@@ -361,6 +365,10 @@ const GraphCanvasInner: React.FC<ArchitectureGraphProps> = ({
           minZoom={0.15}
           maxZoom={2.5}
           proOptions={{ hideAttribution: true }}
+          zoomOnScroll={zoomOnScroll !== undefined ? zoomOnScroll : (diffMode ? false : true)}
+          preventScrolling={preventScrolling !== undefined ? preventScrolling : (diffMode ? false : true)}
+          zoomOnPinch={true}
+          panOnDrag={true}
         >
           <Background variant={BackgroundVariant.Dots} gap={20} size={1.2} color="#cbd5e1" />
           <Controls

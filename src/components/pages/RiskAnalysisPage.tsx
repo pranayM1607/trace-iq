@@ -317,58 +317,73 @@ export const RiskAnalysisPage: React.FC<RiskAnalysisPageProps> = ({
         {/* 5 Summary Metric Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
           {/* Critical Components */}
-          <div className="bg-white p-3.5 rounded-xl border border-rose-200 shadow-2xs">
+          <div
+            className="bg-white p-3.5 rounded-xl border border-rose-200 shadow-2xs"
+            title="Services with high central traffic whose disruption impacts numerous dependent components."
+          >
             <div className="text-[11px] text-rose-700 font-bold uppercase tracking-wider">
-              Critical Nodes
+              Critical Services
             </div>
             <div className="text-2xl font-extrabold text-rose-900 mt-1 font-mono">
               {analysisResult.critical_components.filter((c) => c.criticality_tier === 'CRITICAL').length}
             </div>
-            <div className="text-[10px] text-rose-600 mt-0.5 truncate">High betweenness / fan-in</div>
+            <div className="text-[10px] text-rose-600 mt-0.5 truncate">Most depended-upon services</div>
           </div>
 
           {/* High Risk Dependencies */}
-          <div className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-2xs">
+          <div
+            className="bg-white p-3.5 rounded-xl border border-amber-200 shadow-2xs"
+            title="Direct connections pointing toward critical nodes with high blast radius."
+          >
             <div className="text-[11px] text-amber-700 font-bold uppercase tracking-wider">
-              High-Risk Deps
+              High-Risk Links
             </div>
             <div className="text-2xl font-extrabold text-amber-900 mt-1 font-mono">
               {analysisResult.high_risk_dependencies.filter((d) => d.risk_level === 'CRITICAL' || d.risk_level === 'HIGH').length}
             </div>
-            <div className="text-[10px] text-amber-600 mt-0.5 truncate">Coupled to critical targets</div>
+            <div className="text-[10px] text-amber-600 mt-0.5 truncate">Links to critical targets</div>
           </div>
 
           {/* Single Points of Failure */}
-          <div className="bg-white p-3.5 rounded-xl border border-purple-200 shadow-2xs">
+          <div
+            className="bg-white p-3.5 rounded-xl border border-purple-200 shadow-2xs"
+            title="Components without redundant backup routes whose failure would isolate parts of the system."
+          >
             <div className="text-[11px] text-purple-700 font-bold uppercase tracking-wider">
-              SPOF Bottlenecks
+              Single Points of Failure
             </div>
             <div className="text-2xl font-extrabold text-purple-900 mt-1 font-mono">
               {analysisResult.spofs.filter((s) => s.is_spof).length}
             </div>
-            <div className="text-[10px] text-purple-600 mt-0.5 truncate">Articulation cut-vertices</div>
+            <div className="text-[10px] text-purple-600 mt-0.5 truncate">Failure isolates system parts</div>
           </div>
 
           {/* Cycles Detected */}
-          <div className="bg-white p-3.5 rounded-xl border border-indigo-200 shadow-2xs">
+          <div
+            className="bg-white p-3.5 rounded-xl border border-indigo-200 shadow-2xs"
+            title="Recursive loops where components depend on each other, creating deadlock and cascading failure risks."
+          >
             <div className="text-[11px] text-indigo-700 font-bold uppercase tracking-wider">
-              Cycles Detected
+              Circular Loops
             </div>
             <div className="text-2xl font-extrabold text-indigo-900 mt-1 font-mono">
               {analysisResult.complexity.cycles_count}
             </div>
-            <div className="text-[10px] text-indigo-600 mt-0.5 truncate">Circular call loops</div>
+            <div className="text-[10px] text-indigo-600 mt-0.5 truncate">Circular dependency chains</div>
           </div>
 
           {/* Cyclomatic Complexity */}
-          <div className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs">
+          <div
+            className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs"
+            title="Structural interconnectedness metric calculated as: Connections - Nodes + (2 * Subgraphs)."
+          >
             <div className="text-[11px] text-slate-500 font-bold uppercase tracking-wider">
-              Complexity (M)
+              Graph Complexity
             </div>
             <div className="text-2xl font-extrabold text-slate-900 mt-1 font-mono">
               {analysisResult.complexity.cyclomatic_complexity}
             </div>
-            <div className="text-[10px] text-slate-500 mt-0.5 truncate">M = E - V + 2P formula</div>
+            <div className="text-[10px] text-slate-500 mt-0.5 truncate">Interconnection density (M)</div>
           </div>
         </div>
       </div>

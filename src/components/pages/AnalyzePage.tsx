@@ -4,33 +4,30 @@ import {
   FileCode,
   FolderTree,
   Network,
-  History,
+  GitCompare,
   Sparkles,
   ArrowRight,
   Database,
   Server,
   Layers,
 } from 'lucide-react';
-import type { ArchitectureModel, ArchitectureSnapshot, ProcessingStep } from '../../types/architecture';
+import type { ArchitectureModel, ProcessingStep } from '../../types/architecture';
 import type { NavRoute } from '../layout/Sidebar';
 import { ProcessingPipeline } from '../pipeline/ProcessingPipeline';
 
 interface AnalyzePageProps {
   model: ArchitectureModel;
-  snapshots: ArchitectureSnapshot[];
   isProcessing: boolean;
   pipelineSteps: ProcessingStep[];
   onNavigate: (route: NavRoute) => void;
   onOpenCodebaseModal: () => void;
   onOpenBlueprintModal: () => void;
   onOpenScenarioModal: () => void;
-  onSaveSnapshot: (label: string) => void;
   onOpenRawPayload?: () => void;
 }
 
 export const AnalyzePage: React.FC<AnalyzePageProps> = ({
   model,
-  snapshots,
   isProcessing,
   pipelineSteps,
   onNavigate,
@@ -200,11 +197,11 @@ export const AnalyzePage: React.FC<AnalyzePageProps> = ({
                 </button>
 
                 <button
-                  onClick={() => onNavigate('snapshots')}
+                  onClick={() => onNavigate('compare')}
                   className="py-2 px-3 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-800 font-semibold text-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
                 >
-                  <History className="w-3.5 h-3.5 text-slate-600" />
-                  <span>Snapshots ({snapshots.length})</span>
+                  <GitCompare className="w-3.5 h-3.5 text-slate-600" />
+                  <span>Compare Models</span>
                 </button>
               </div>
 

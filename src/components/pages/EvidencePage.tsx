@@ -14,6 +14,8 @@ interface EvidenceItem {
   type: string;
   file: string;
   line?: number;
+  lineEnd?: number;
+  lineRange?: string;
   statement?: string;
   snippet?: string;
   confidence: EvidenceConfidence;
@@ -44,15 +46,20 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
     // From Relationships
     (model.relationships || []).forEach((rel) => {
       if (rel.sourceEvidence) {
+        const line = rel.sourceEvidence.line;
+        const lineEnd = rel.sourceEvidence.lineEnd;
+        const lineRange = rel.sourceEvidence.lineRange || (line ? (lineEnd && lineEnd !== line ? `${line}–${lineEnd}` : `${line}`) : undefined);
         items.push({
           id: `rel-${rel.id}`,
           sourceEntity: rel.source,
           targetEntity: rel.target,
           type: rel.type,
           file: rel.sourceEvidence.file || 'topology-manifest',
-          line: rel.sourceEvidence.line,
+          line,
+          lineEnd,
+          lineRange,
           statement: rel.sourceEvidence.statement,
-          snippet: rel.sourceEvidence.snippet,
+          snippet: rel.sourceEvidence.snippet || 'Exact source block unavailable.',
           confidence: rel.sourceEvidence.confidence || 'HIGH',
           extractionMethod: rel.sourceEvidence.method || 'AST Dependency Scanner',
           description: rel.sourceEvidence.description || `${rel.source} ${rel.type} ${rel.target}`,
@@ -63,15 +70,24 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
     // From Entities metadata
     (model.entities || []).forEach((ent) => {
       if (ent.metadata?.filePath) {
+        const rawSnippet = ent.metadata?.snippet || ent.sourceEvidence?.snippet || ent.metadata?.sourceCode;
+        const line = ent.metadata?.line || ent.sourceEvidence?.line;
+        const lineEnd = ent.metadata?.endLine || ent.sourceEvidence?.lineEnd;
+        const lineRange = ent.metadata?.lineRange || ent.sourceEvidence?.lineRange || (line ? (lineEnd && lineEnd !== line ? `${line}–${lineEnd}` : `${line}`) : undefined);
+        const method = ent.sourceEvidence?.method || (ent.source === 'Detected' ? 'AST Module Parser' : 'Manifest Scanner');
+
         items.push({
           id: `ent-${ent.id}`,
           sourceEntity: ent.name,
           type: ent.type,
           file: ent.metadata.filePath,
-          confidence: 'HIGH',
-          extractionMethod: ent.source === 'Detected' ? 'AST Module Parser' : 'Manifest Scanner',
-          description: `Discovered ${ent.type} component defined in ${ent.metadata.filePath}`,
-          snippet: ent.description ? `// Definition:\n${ent.description}` : undefined,
+          line: typeof line === 'number' ? line : undefined,
+          lineEnd: typeof lineEnd === 'number' ? lineEnd : undefined,
+          lineRange,
+          confidence: ent.sourceEvidence?.confidence || 'HIGH',
+          extractionMethod: method,
+          description: ent.description || `Discovered ${ent.type} component "${ent.name}" defined in ${ent.metadata.filePath}`,
+          snippet: rawSnippet ? String(rawSnippet).trim() : 'Exact source block unavailable.',
         });
       }
     });
@@ -230,7 +246,7 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
                       </span>
                     </td>
                     <td className="py-3 px-4 font-mono text-xs text-slate-600 truncate max-w-xs" title={item.file}>
-                      {item.file} {item.line ? `:${item.line}` : ''}
+                      {item.file} {item.lineRange ? `:${item.lineRange}` : item.line ? `:${item.line}` : ''}
                     </td>
                     <td className="py-3 px-3 text-slate-500 text-[11px]">
                       {item.extractionMethod}
@@ -261,7 +277,7 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
                         }}
                         className="px-2.5 py-1 rounded-md text-[11px] font-semibold text-violet-700 hover:bg-violet-50 border border-violet-200 transition-colors cursor-pointer"
                       >
-                        Snippet
+                        Source Block
                       </button>
                     </td>
                   </tr>
@@ -278,10 +294,10 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
         </div>
       </div>
 
-      {/* Snippet Modal */}
+      {/* Snippet / Code Block Modal */}
       {activeEvidence && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/40 backdrop-blur-xs p-4">
-          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-lg w-full p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
+          <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full p-5 space-y-4 animate-in fade-in zoom-in-95 duration-150">
             <div className="flex items-start justify-between">
               <div>
                 <span className="text-[10px] font-bold uppercase tracking-wider text-slate-600">
@@ -301,9 +317,25 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
 
             <div className="space-y-3 text-xs">
               <div className="p-3 rounded-xl bg-slate-50 border border-slate-200 space-y-1.5">
-                <div className="text-[11px] text-slate-500">File Path</div>
+                <div className="flex items-center justify-between text-[11px] text-slate-500">
+                  <span>File & Location</span>
+                  {activeEvidence.lineRange ? (
+                    <span className="font-mono font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                      Lines {activeEvidence.lineRange}
+                    </span>
+                  ) : activeEvidence.line ? (
+                    <span className="font-mono font-bold text-violet-700 bg-violet-50 px-1.5 py-0.5 rounded border border-violet-200">
+                      Line {activeEvidence.line}
+                    </span>
+                  ) : null}
+                </div>
                 <div className="font-mono text-xs font-bold text-slate-800 break-all">
-                  {activeEvidence.file}
+                  {activeEvidence.file} {activeEvidence.lineRange ? `:${activeEvidence.lineRange}` : activeEvidence.line ? `:${activeEvidence.line}` : ''}
+                </div>
+                <div className="flex items-center gap-3 text-[11px] text-slate-500 pt-1">
+                  <span>Method: <strong className="text-slate-700">{activeEvidence.extractionMethod}</strong></span>
+                  <span>•</span>
+                  <span>Confidence: <strong className="text-emerald-700">{activeEvidence.confidence}</strong></span>
                 </div>
                 {activeEvidence.description && (
                   <div className="text-[11px] text-slate-600 mt-1 pt-1 border-t border-slate-200">
@@ -312,10 +344,18 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
                 )}
               </div>
 
-              {activeEvidence.snippet && (
+              {(!activeEvidence.snippet ||
+                activeEvidence.snippet === 'Exact source snippet unavailable.' ||
+                activeEvidence.snippet === 'Exact source block unavailable.') ? (
+                <div className="p-3 rounded-xl bg-slate-100 border border-slate-200 text-slate-500 font-mono text-xs italic">
+                  Exact source block unavailable.
+                </div>
+              ) : (
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between">
-                    <span className="text-[11px] font-bold text-slate-700">Code Statement Snippet:</span>
+                    <span className="text-[11px] font-bold text-slate-700">
+                      Source Code Block {activeEvidence.lineRange ? `(Lines ${activeEvidence.lineRange})` : activeEvidence.line ? `(Line ${activeEvidence.line})` : ''}:
+                    </span>
                     <button
                       onClick={() => handleCopySnippet(activeEvidence.snippet || '')}
                       className="text-[10px] text-violet-700 font-semibold hover:underline flex items-center gap-1 cursor-pointer"
@@ -324,7 +364,7 @@ export const EvidencePage: React.FC<EvidencePageProps> = ({
                       <span>{copied ? 'Copied' : 'Copy'}</span>
                     </button>
                   </div>
-                  <pre className="p-3 rounded-xl bg-slate-900 text-emerald-400 font-mono text-xs overflow-x-auto leading-relaxed">
+                  <pre className="p-3 rounded-xl bg-slate-900 text-emerald-400 font-mono text-xs overflow-x-auto leading-relaxed max-h-72">
                     {activeEvidence.snippet}
                   </pre>
                 </div>

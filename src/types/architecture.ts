@@ -25,6 +25,8 @@ export type EvidenceConfidence = 'HIGH' | 'MEDIUM' | 'LOW';
 export interface SourceEvidence {
   file?: string;
   line?: number;
+  lineEnd?: number;
+  lineRange?: string;
   snippet?: string;
   description?: string;
   method?: string;
@@ -39,6 +41,7 @@ export interface ArchitectureEntity {
   technology: string;
   source: SourceType;
   description?: string;
+  sourceEvidence?: SourceEvidence;
   metadata?: {
     runtime?: string;
     framework?: string;
@@ -431,6 +434,9 @@ export interface StructuralRiskDelta {
   originalScore: number;
   changedScore: number;
   delta: number;
+  originalRiskLevel?: RiskLevel;
+  changedRiskLevel?: RiskLevel;
+  shiftDirection?: 'Higher structural risk' | 'Lower structural risk' | 'No structural risk change';
   ledger: CausalRiskFactor[];
   attributionStatement: string;
 }
@@ -631,4 +637,7 @@ export interface ChangeSimulationResult {
   risk_delta: number;
   causal_risk_ledger: CausalRiskFactor[];
   change_story: ChangeStoryStep[];
+  broken_dependencies?: Array<{ callerName: string; missingTargetName: string }>;
+  recommended_checks?: string[];
+  why_risk_changed?: string;
 }

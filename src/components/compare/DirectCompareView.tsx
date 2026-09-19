@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   GitCompare,
   Upload,
@@ -15,51 +15,84 @@ import {
   FileCheck2,
   ChevronDown,
   ChevronUp,
+  Sliders,
+  Play,
+  Plus,
+  Trash2,
+  CheckCircle2,
+  ShieldCheck,
 } from 'lucide-react';
 import type {
   ArchitectureComparisonResult,
-  ArchitectureSnapshot,
   DiffNodeItem,
   DiffRelationshipItem,
+  ArchitectureEntity,
+  ArchitectureRelationship,
+  ProposedChange,
+  ChangeSimulationResult,
 } from '../../types/architecture';
-import { compareRealInputs, compareRealModels } from '../../engine/directCompareEngine';
+import { compareRealInputs } from '../../engine/directCompareEngine';
 import { ArchitectureGraph } from '../graph/ArchitectureGraph';
+import { Objective2AnalysisEngine } from '../../engine/objective2AnalysisEngine';
+import { ChangeSimulatorEngine } from '../../engine/changeSimulatorEngine';
 
 interface DirectCompareViewProps {
-  savedSnapshots: ArchitectureSnapshot[];
   onSelectEntity?: (entityId: string) => void;
+  persistedComparison?: ArchitectureComparisonResult | null;
+  onSetPersistedComparison?: (result: ArchitectureComparisonResult | null) => void;
+  persistedOrigFile?: File | null;
+  onSetPersistedOrigFile?: (file: File | null) => void;
+  persistedChgFile?: File | null;
+  onSetPersistedChgFile?: (file: File | null) => void;
+  persistedActiveTab?: 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload';
+  onSetPersistedActiveTab?: (tab: 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload') => void;
 }
 
 export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
-  savedSnapshots,
   onSelectEntity,
+  persistedComparison,
+  onSetPersistedComparison,
+  persistedOrigFile,
+  onSetPersistedOrigFile,
+  persistedChgFile,
+  onSetPersistedChgFile,
+  persistedActiveTab = 'repo_diff',
+  onSetPersistedActiveTab,
 }) => {
-  // Input mode: 'upload' | 'snapshots'
-  const [compareSource, setCompareSource] = useState<'upload' | 'snapshots'>('upload');
-
   // Upload files state
-  const [origFile, setOrigFile] = useState<File | null>(null);
-  const [chgFile, setChgFile] = useState<File | null>(null);
+  const [origFile, setOrigFileInternal] = useState<File | null>(persistedOrigFile || null);
+  const setOrigFile = (f: File | null) => {
+    setOrigFileInternal(f);
+    if (onSetPersistedOrigFile) onSetPersistedOrigFile(f);
+  };
 
-  // Snapshot selection state
-  const [origSnapId, setOrigSnapId] = useState<string>(savedSnapshots[0]?.id || '');
-  const [chgSnapId, setChgSnapId] = useState<string>(savedSnapshots[1]?.id || savedSnapshots[0]?.id || '');
+  const [chgFile, setChgFileInternal] = useState<File | null>(persistedChgFile || null);
+  const setChgFile = (f: File | null) => {
+    setChgFileInternal(f);
+    if (onSetPersistedChgFile) onSetPersistedChgFile(f);
+  };
 
   // Comparison State
   const [isComparing, setIsComparing] = useState(false);
   const [compareError, setCompareError] = useState<string | null>(null);
-  const [comparisonResult, setComparisonResult] = useState<ArchitectureComparisonResult | null>(null);
-  const [comparisonType, setComparisonType] = useState<'direct_upload' | 'snapshot_compare'>('direct_upload');
+  const [comparisonResult, setComparisonResultInternal] = useState<ArchitectureComparisonResult | null>(persistedComparison || null);
+  const setComparisonResult = (res: ArchitectureComparisonResult | null) => {
+    setComparisonResultInternal(res);
+    if (onSetPersistedComparison) onSetPersistedComparison(res);
+  };
 
   // Side-by-side graph selection and visibility state
   const [isGraphCollapsed, setIsGraphCollapsed] = useState(false);
   const [selectedOrigEntityId, setSelectedOrigEntityId] = useState<string | null>(null);
   const [selectedChgEntityId, setSelectedChgEntityId] = useState<string | null>(null);
 
-  // Active Tab: 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'json_payload'
-  const [activeTab, setActiveTab] = useState<
-    'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'json_payload'
-  >('repo_diff');
+  // Active Tab
+  type CompareTab = 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload';
+  const [activeTab, setActiveTabInternal] = useState<CompareTab>(persistedActiveTab);
+  const setActiveTab = (t: CompareTab) => {
+    setActiveTabInternal(t);
+    if (onSetPersistedActiveTab) onSetPersistedActiveTab(t);
+  };
 
   // Repo filter
   const [repoFilter, setRepoFilter] = useState<'all' | 'added' | 'removed' | 'modified' | 'unchanged'>('all');
@@ -77,7 +110,6 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
     try {
       const result = await compareRealInputs(origFile, chgFile);
       setComparisonResult(result);
-      setComparisonType('direct_upload');
       setActiveTab('arch_diff');
     } catch (err: any) {
       setCompareError(err.message || 'Comparison failed. Please verify input files.');
@@ -86,32 +118,219 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
     }
   };
 
-  // Run Snapshot Comparison
-  const handleRunSnapshotCompare = () => {
-    const s1 = savedSnapshots.find((s) => s.id === origSnapId);
-    const s2 = savedSnapshots.find((s) => s.id === chgSnapId);
-
-    if (!s1 || !s2) {
-      setCompareError('Please select two valid snapshots to compare.');
-      return;
-    }
-
-    try {
-      const result = compareRealModels(s1.architecture, s2.architecture);
-      setComparisonResult(result);
-      setComparisonType('snapshot_compare');
-      setActiveTab('arch_diff');
-      setCompareError(null);
-    } catch (err: any) {
-      setCompareError(err.message || 'Snapshot comparison failed.');
-    }
-  };
-
   const archDiff = comparisonResult?.architectureDiff;
   const repoDiff = comparisonResult?.repositoryDiff;
   const impact = comparisonResult?.impactAnalysis;
   const risk = comparisonResult?.structuralRisk;
   const story = comparisonResult?.changeStory;
+
+  // Objective 2 deterministic risk analyses for V1 and V2
+  const v1Analysis = useMemo(() => {
+    if (!comparisonResult?.originalModel) return null;
+    return Objective2AnalysisEngine.analyzeArchitecture(comparisonResult.originalModel, 'v1-baseline');
+  }, [comparisonResult?.originalModel]);
+
+  const v2Analysis = useMemo(() => {
+    if (!comparisonResult?.changedModel) return null;
+    return Objective2AnalysisEngine.analyzeArchitecture(comparisonResult.changedModel, 'v2-target');
+  }, [comparisonResult?.changedModel]);
+
+  const v1Score = useMemo(() => {
+    return v1Analysis ? Objective2AnalysisEngine.calculateDeterministicRiskScore(v1Analysis) : 0;
+  }, [v1Analysis]);
+
+  const v2Score = useMemo(() => {
+    return v2Analysis ? Objective2AnalysisEngine.calculateDeterministicRiskScore(v2Analysis) : 0;
+  }, [v2Analysis]);
+
+  const v1Level = useMemo(() => Objective2AnalysisEngine.getRiskLevel(v1Score), [v1Score]);
+  const v2Level = useMemo(() => Objective2AnalysisEngine.getRiskLevel(v2Score), [v2Score]);
+
+  const riskDelta = useMemo(() => Number((v2Score - v1Score).toFixed(1)), [v1Score, v2Score]);
+  const shiftDirection = useMemo(() => {
+    if (riskDelta > 0) return 'Higher structural risk';
+    if (riskDelta < 0) return 'Lower structural risk';
+    return 'No structural risk change';
+  }, [riskDelta]);
+
+  // Breakdown metrics for V1
+  const v1ServicesCount = useMemo(() => {
+    return comparisonResult?.originalModel.entities.filter((e) => e.type === 'Service').length || 0;
+  }, [comparisonResult?.originalModel]);
+
+  const v1ApisCount = useMemo(() => {
+    return comparisonResult?.originalModel.entities.filter((e) => e.type === 'API').length || 0;
+  }, [comparisonResult?.originalModel]);
+
+  const v1DbsCount = useMemo(() => {
+    return comparisonResult?.originalModel.entities.filter((e) => e.type === 'Database').length || 0;
+  }, [comparisonResult?.originalModel]);
+
+  const v1CriticalNames = useMemo(() => {
+    return v1Analysis?.critical_components.slice(0, 3).map((c) => c.name).join(', ') || 'None';
+  }, [v1Analysis]);
+
+  // Breakdown metrics for V2
+  const v2ServicesCount = useMemo(() => {
+    return comparisonResult?.changedModel.entities.filter((e) => e.type === 'Service').length || 0;
+  }, [comparisonResult?.changedModel]);
+
+  const v2ApisCount = useMemo(() => {
+    return comparisonResult?.changedModel.entities.filter((e) => e.type === 'API').length || 0;
+  }, [comparisonResult?.changedModel]);
+
+  const v2DbsCount = useMemo(() => {
+    return comparisonResult?.changedModel.entities.filter((e) => e.type === 'Database').length || 0;
+  }, [comparisonResult?.changedModel]);
+
+  const v2CriticalNames = useMemo(() => {
+    return v2Analysis?.critical_components.slice(0, 3).map((c) => c.name).join(', ') || 'None';
+  }, [v2Analysis]);
+
+  // Sandbox simulation state on V2
+  const [sandboxAction, setSandboxAction] = useState<'remove_component' | 'add_component' | 'add_dependency' | 'remove_dependency'>('remove_component');
+  const [sandboxRemoveCompId, setSandboxRemoveCompId] = useState<string>('');
+  const [sandboxNewCompName, setSandboxNewCompName] = useState<string>('');
+  const [sandboxNewCompType, setSandboxNewCompType] = useState<ArchitectureEntity['type']>('Service');
+  const [sandboxNewCompTech, setSandboxNewCompTech] = useState<string>('Node.js / Express');
+  const [sandboxDepSource, setSandboxDepSource] = useState<string>('');
+  const [sandboxDepTarget, setSandboxDepTarget] = useState<string>('');
+  const [sandboxDepType, setSandboxDepType] = useState<ArchitectureRelationship['type']>('CALLS');
+  const [sandboxRemoveRelId, setSandboxRemoveRelId] = useState<string>('');
+  const [sandboxStagedChanges, setSandboxStagedChanges] = useState<ProposedChange[]>([]);
+  const [sandboxSimResult, setSandboxSimResult] = useState<ChangeSimulationResult | null>(null);
+  const [sandboxError, setSandboxError] = useState<string | null>(null);
+
+  // Initialize sandbox dropdown selections when changedModel is present
+  useEffect(() => {
+    const v2Entities = comparisonResult?.changedModel.entities || [];
+    const v2Rels = comparisonResult?.changedModel.relationships || [];
+    if (v2Entities.length > 0) {
+      if (!sandboxRemoveCompId) setSandboxRemoveCompId(v2Entities[0].id);
+      if (!sandboxDepSource) setSandboxDepSource(v2Entities[0].id);
+      if (!sandboxDepTarget && v2Entities.length > 1) setSandboxDepTarget(v2Entities[1].id);
+    }
+    if (v2Rels.length > 0 && !sandboxRemoveRelId) {
+      setSandboxRemoveRelId(v2Rels[0].id);
+    }
+  }, [comparisonResult?.changedModel, sandboxRemoveCompId, sandboxDepSource, sandboxDepTarget, sandboxRemoveRelId]);
+
+  const handleStageSandboxChange = () => {
+    setSandboxError(null);
+    const v2Entities = comparisonResult?.changedModel.entities || [];
+    const v2Rels = comparisonResult?.changedModel.relationships || [];
+
+    if (sandboxAction === 'remove_component') {
+      if (!sandboxRemoveCompId) {
+        setSandboxError('Please select a component to remove.');
+        return;
+      }
+      const targetEntity = v2Entities.find((e) => e.id === sandboxRemoveCompId);
+      const newChange: ProposedChange = {
+        id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        action: 'remove_component',
+        description: `Remove Component '${targetEntity?.name || sandboxRemoveCompId}'`,
+        component_id: sandboxRemoveCompId,
+      };
+      setSandboxStagedChanges((prev) => [...prev, newChange]);
+      setSandboxSimResult(null);
+    } else if (sandboxAction === 'add_component') {
+      if (!sandboxNewCompName.trim()) {
+        setSandboxError('Component name is required.');
+        return;
+      }
+      const newCompId = `comp-${sandboxNewCompName.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now().toString().slice(-4)}`;
+      const newChange: ProposedChange = {
+        id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        action: 'add_component',
+        description: `Add ${sandboxNewCompType} '${sandboxNewCompName}' (${sandboxNewCompTech})`,
+        component: {
+          id: newCompId,
+          name: sandboxNewCompName.trim(),
+          type: sandboxNewCompType,
+          technology: sandboxNewCompTech.trim() || 'Generic',
+          source: 'User-provided',
+          description: `Sandbox simulated ${sandboxNewCompType}`,
+        },
+      };
+      setSandboxStagedChanges((prev) => [...prev, newChange]);
+      setSandboxNewCompName('');
+      setSandboxSimResult(null);
+    } else if (sandboxAction === 'add_dependency') {
+      if (!sandboxDepSource || !sandboxDepTarget) {
+        setSandboxError('Source and target components are required.');
+        return;
+      }
+      if (sandboxDepSource === sandboxDepTarget) {
+        setSandboxError('Source and target cannot be the same component.');
+        return;
+      }
+      const src = v2Entities.find((e) => e.id === sandboxDepSource);
+      const tgt = v2Entities.find((e) => e.id === sandboxDepTarget);
+      const newChange: ProposedChange = {
+        id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        action: 'add_dependency',
+        description: `Add Dependency: '${src?.name || sandboxDepSource}' -> '${tgt?.name || sandboxDepTarget}' (${sandboxDepType})`,
+        relationship: {
+          id: `rel-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+          source: sandboxDepSource,
+          target: sandboxDepTarget,
+          type: sandboxDepType,
+          protocol: 'HTTP/REST',
+          description: `Simulated edge from ${src?.name} to ${tgt?.name}`,
+        },
+      };
+      setSandboxStagedChanges((prev) => [...prev, newChange]);
+      setSandboxSimResult(null);
+    } else if (sandboxAction === 'remove_dependency') {
+      if (!sandboxRemoveRelId) {
+        setSandboxError('Please select a dependency to remove.');
+        return;
+      }
+      const matched = v2Rels.find((r) => r.id === sandboxRemoveRelId);
+      const src = v2Entities.find((e) => e.id === matched?.source);
+      const tgt = v2Entities.find((e) => e.id === matched?.target);
+      const newChange: ProposedChange = {
+        id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
+        action: 'remove_dependency',
+        description: `Remove Dependency: '${src?.name || matched?.source}' -> '${tgt?.name || matched?.target}'`,
+        relationship_id: sandboxRemoveRelId,
+      };
+      setSandboxStagedChanges((prev) => [...prev, newChange]);
+      setSandboxSimResult(null);
+    }
+  };
+
+  const handleRemoveSandboxStaged = (id: string) => {
+    setSandboxStagedChanges((prev) => prev.filter((c) => c.id !== id));
+    setSandboxSimResult(null);
+  };
+
+  const handleClearSandboxStaged = () => {
+    setSandboxStagedChanges([]);
+    setSandboxSimResult(null);
+    setSandboxError(null);
+  };
+
+  const handleRunSandboxSim = () => {
+    if (!comparisonResult?.changedModel) return;
+    if (sandboxStagedChanges.length === 0) {
+      setSandboxError('Please stage at least one change before running simulation.');
+      return;
+    }
+    setSandboxError(null);
+    try {
+      // In-memory isolated simulation on V2
+      const result = ChangeSimulatorEngine.simulateChange(
+        comparisonResult.changedModel,
+        sandboxStagedChanges,
+        'compare-sandbox'
+      );
+      setSandboxSimResult(result);
+    } catch (err: any) {
+      setSandboxError(err.message || 'Simulation execution failed.');
+    }
+  };
 
   // Compute isolated diff node and relationship maps for Original and Changed graphs
   const { origDiffNodesMap, origDiffEdgesMap, chgDiffNodesMap, chgDiffEdgesMap } = useMemo(() => {
@@ -196,7 +415,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
   }) || [];
 
   return (
-    <div className="flex-1 flex flex-col h-full overflow-hidden bg-slate-100">
+    <div className="w-full min-h-full flex flex-col bg-slate-100">
       {/* Top Bar: Comparison Configuration & Dropzones */}
       <div className="bg-white border-b border-slate-200 p-4 shadow-2xs">
         <div className="flex flex-wrap items-center justify-between gap-3 mb-3">
@@ -212,152 +431,87 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
             </div>
           </div>
 
-          {/* Mode Switcher */}
-          <div className="flex items-center bg-slate-100 p-1 rounded-lg border border-slate-200 text-xs">
-            <button
-              onClick={() => setCompareSource('upload')}
-              className={`px-3 py-1 font-semibold rounded-md transition-all cursor-pointer ${
-                compareSource === 'upload' ? 'bg-white text-purple-700 shadow-2xs font-bold' : 'text-slate-600'
-              }`}
-            >
-              Upload Dual Files
-            </button>
-            {savedSnapshots.length >= 2 && (
-              <button
-                onClick={() => setCompareSource('snapshots')}
-                className={`px-3 py-1 font-semibold rounded-md transition-all cursor-pointer ${
-                  compareSource === 'snapshots' ? 'bg-white text-purple-700 shadow-2xs font-bold' : 'text-slate-600'
-                }`}
-              >
-                Saved Snapshots ({savedSnapshots.length})
-              </button>
-            )}
-          </div>
         </div>
 
-        {/* Input Zones */}
-        {compareSource === 'upload' ? (
-          <div className="grid grid-cols-1 md:grid-cols-11 gap-3 items-center">
-            {/* Dropzone 1: Original */}
-            <div className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-xl p-3 text-center transition-colors">
-              <input
-                type="file"
-                accept=".zip,.json"
-                id="originalFileInput"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.[0]) setOrigFile(e.target.files[0]);
-                }}
-              />
-              <label htmlFor="originalFileInput" className="cursor-pointer block">
-                <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <span className="w-2 h-2 rounded-full bg-blue-500"></span>
-                  ORIGINAL / BASELINE (V1)
+        {/* Input Zones: Dual Files */}
+        <div className="grid grid-cols-1 md:grid-cols-11 gap-3 items-center">
+          {/* Dropzone 1: Original */}
+          <div className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-blue-400 rounded-xl p-3 text-center transition-colors">
+            <input
+              type="file"
+              accept=".zip,.json"
+              id="originalFileInput"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) setOrigFile(e.target.files[0]);
+              }}
+            />
+            <label htmlFor="originalFileInput" className="cursor-pointer block">
+              <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700 mb-1">
+                <span className="w-2 h-2 rounded-full bg-blue-500"></span>
+                ORIGINAL / BASELINE (V1)
+              </div>
+              {origFile ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-blue-700 font-semibold bg-blue-50 py-1.5 px-3 rounded-lg border border-blue-200">
+                  {origFile.name.endsWith('.zip') ? <FileArchive className="w-4 h-4" /> : <FileCode className="w-4 h-4" />}
+                  <span className="truncate max-w-[200px]">{origFile.name}</span>
+                  <span className="text-[11px] text-blue-500">({(origFile.size / 1024).toFixed(1)} KB)</span>
                 </div>
-                {origFile ? (
-                  <div className="flex items-center justify-center gap-2 text-xs text-blue-700 font-semibold bg-blue-50 py-1.5 px-3 rounded-lg border border-blue-200">
-                    {origFile.name.endsWith('.zip') ? <FileArchive className="w-4 h-4" /> : <FileCode className="w-4 h-4" />}
-                    <span className="truncate max-w-[200px]">{origFile.name}</span>
-                    <span className="text-[11px] text-blue-500">({(origFile.size / 1024).toFixed(1)} KB)</span>
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-500 flex items-center justify-center gap-1.5 py-1.5">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Select baseline .ZIP or .JSON</span>
-                  </div>
-                )}
-              </label>
-            </div>
-
-            {/* Middle Action / Arrow */}
-            <div className="md:col-span-1 flex flex-col items-center justify-center">
-              <button
-                onClick={handleRunUploadCompare}
-                disabled={!origFile || !chgFile || isComparing}
-                className={`w-full py-2 px-3 rounded-lg font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
-                  origFile && chgFile && !isComparing
-                    ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-500/20 hover:scale-[1.02]'
-                    : 'bg-slate-200 text-slate-400 cursor-not-allowed'
-                }`}
-              >
-                {isComparing ? 'Analyzing...' : <ArrowRight className="w-4 h-4" />}
-              </button>
-            </div>
-
-            {/* Dropzone 2: Changed */}
-            <div className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-purple-400 rounded-xl p-3 text-center transition-colors">
-              <input
-                type="file"
-                accept=".zip,.json"
-                id="changedFileInput"
-                className="hidden"
-                onChange={(e) => {
-                  if (e.target.files?.[0]) setChgFile(e.target.files[0]);
-                }}
-              />
-              <label htmlFor="changedFileInput" className="cursor-pointer block">
-                <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700 mb-1">
-                  <span className="w-2 h-2 rounded-full bg-purple-500"></span>
-                  CHANGED / TARGET (V2)
+              ) : (
+                <div className="text-xs text-slate-500 flex items-center justify-center gap-1.5 py-1.5">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Select baseline .ZIP or .JSON</span>
                 </div>
-                {chgFile ? (
-                  <div className="flex items-center justify-center gap-2 text-xs text-purple-700 font-semibold bg-purple-50 py-1.5 px-3 rounded-lg border border-purple-200">
-                    {chgFile.name.endsWith('.zip') ? <FileArchive className="w-4 h-4" /> : <FileCode className="w-4 h-4" />}
-                    <span className="truncate max-w-[200px]">{chgFile.name}</span>
-                    <span className="text-[11px] text-purple-500">({(chgFile.size / 1024).toFixed(1)} KB)</span>
-                  </div>
-                ) : (
-                  <div className="text-xs text-slate-500 flex items-center justify-center gap-1.5 py-1.5">
-                    <Upload className="w-3.5 h-3.5" />
-                    <span>Select target .ZIP or .JSON</span>
-                  </div>
-                )}
-              </label>
-            </div>
+              )}
+            </label>
           </div>
-        ) : (
-          /* Snapshot selector row */
-          <div className="flex flex-wrap items-center gap-3">
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
-              <span className="font-bold text-slate-500">Baseline Snapshot:</span>
-              <select
-                value={origSnapId}
-                onChange={(e) => setOrigSnapId(e.target.value)}
-                className="bg-transparent font-semibold text-slate-800 focus:outline-none"
-              >
-                {savedSnapshots.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label} ({s.nodeCount} nodes, {s.fileCount} files)
-                  </option>
-                ))}
-              </select>
-            </div>
 
-            <ArrowRight className="w-4 h-4 text-slate-400" />
-
-            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 px-3 py-1.5 rounded-lg text-xs">
-              <span className="font-bold text-slate-500">Target Snapshot:</span>
-              <select
-                value={chgSnapId}
-                onChange={(e) => setChgSnapId(e.target.value)}
-                className="bg-transparent font-semibold text-slate-800 focus:outline-none"
-              >
-                {savedSnapshots.map((s) => (
-                  <option key={s.id} value={s.id}>
-                    {s.label} ({s.nodeCount} nodes, {s.fileCount} files)
-                  </option>
-                ))}
-              </select>
-            </div>
-
+          {/* Middle Action / Arrow */}
+          <div className="md:col-span-1 flex flex-col items-center justify-center">
             <button
-              onClick={handleRunSnapshotCompare}
-              className="px-4 py-1.5 bg-purple-600 hover:bg-purple-500 text-white font-bold text-xs rounded-lg shadow-xs cursor-pointer transition-colors"
+              onClick={handleRunUploadCompare}
+              disabled={!origFile || !chgFile || isComparing}
+              className={`w-full py-2 px-3 rounded-lg font-bold text-xs shadow-sm flex items-center justify-center gap-1.5 transition-all cursor-pointer ${
+                origFile && chgFile && !isComparing
+                  ? 'bg-purple-600 hover:bg-purple-500 text-white shadow-purple-500/20 hover:scale-[1.02]'
+                  : 'bg-slate-200 text-slate-400 cursor-not-allowed'
+              }`}
             >
-              Compare Snapshots
+              {isComparing ? 'Analyzing...' : <ArrowRight className="w-4 h-4" />}
             </button>
           </div>
-        )}
+
+          {/* Dropzone 2: Changed */}
+          <div className="md:col-span-5 bg-slate-50 border-2 border-dashed border-slate-300 hover:border-purple-400 rounded-xl p-3 text-center transition-colors">
+            <input
+              type="file"
+              accept=".zip,.json"
+              id="changedFileInput"
+              className="hidden"
+              onChange={(e) => {
+                if (e.target.files?.[0]) setChgFile(e.target.files[0]);
+              }}
+            />
+            <label htmlFor="changedFileInput" className="cursor-pointer block">
+              <div className="flex items-center justify-center gap-2 text-xs font-bold text-slate-700 mb-1">
+                <span className="w-2 h-2 rounded-full bg-purple-500"></span>
+                CHANGED / TARGET (V2)
+              </div>
+              {chgFile ? (
+                <div className="flex items-center justify-center gap-2 text-xs text-purple-700 font-semibold bg-purple-50 py-1.5 px-3 rounded-lg border border-purple-200">
+                  {chgFile.name.endsWith('.zip') ? <FileArchive className="w-4 h-4" /> : <FileCode className="w-4 h-4" />}
+                  <span className="truncate max-w-[200px]">{chgFile.name}</span>
+                  <span className="text-[11px] text-purple-500">({(chgFile.size / 1024).toFixed(1)} KB)</span>
+                </div>
+              ) : (
+                <div className="text-xs text-slate-500 flex items-center justify-center gap-1.5 py-1.5">
+                  <Upload className="w-3.5 h-3.5" />
+                  <span>Select target .ZIP or .JSON</span>
+                </div>
+              )}
+            </label>
+          </div>
+        </div>
 
         {/* Error notification */}
         {compareError && (
@@ -370,13 +524,13 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
 
       {/* Comparison Results Content */}
       {comparisonResult ? (
-        <div className="flex-1 flex flex-col overflow-hidden">
+        <div className="w-full flex flex-col">
           {/* Result Header & Metrics Strip */}
           <div className="bg-slate-900 text-white px-4 py-3 border-b border-slate-800">
             <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
               <div className="flex items-center gap-3">
                 <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500 text-white">
-                  {comparisonType === 'direct_upload' ? 'Source: Uploaded Direct' : 'Source: Saved Snapshots'}
+                  Direct Comparison (V1 vs V2)
                 </span>
                 <span className="text-sm font-bold text-white">
                   {comparisonResult.originalIdentity.filename} → {comparisonResult.changedIdentity.filename}
@@ -441,29 +595,27 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
               <div className="bg-slate-800/80 border border-slate-700/80 rounded-lg p-2 flex items-center justify-between">
                 <span className="text-slate-400">Risk Score:</span>
                 <div className="flex items-center gap-1.5 font-mono font-bold">
-                  <span className="text-slate-300">{risk?.originalScore}</span>
+                  <span className="text-slate-300">{v1Score}</span>
                   <span className="text-slate-500">→</span>
-                  <span className="text-slate-300">{risk?.changedScore}</span>
-                  {risk && risk.delta !== 0 && (
-                    <span className={risk.delta > 0 ? 'text-red-400 text-[11px]' : 'text-emerald-400 text-[11px]'}>
-                      ({risk.delta > 0 ? `+${risk.delta}` : risk.delta})
-                    </span>
-                  )}
+                  <span className="text-purple-400">{v2Score}</span>
+                  <span className={riskDelta > 0 ? 'text-red-400 text-[11px]' : riskDelta < 0 ? 'text-emerald-400 text-[11px]' : 'text-slate-400 text-[11px]'}>
+                    ({riskDelta > 0 ? `+${riskDelta}` : riskDelta})
+                  </span>
                 </div>
               </div>
             </div>
           </div>
 
-          {/* Side-by-Side Dual Architecture Graphs Section */}
+          {/* Stacked Dual Architecture Graphs Section */}
           <div className="bg-white border-b border-slate-200 shadow-2xs">
             <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Network className="w-4 h-4 text-purple-600" />
                 <span className="text-xs font-bold text-slate-800 uppercase tracking-wide">
-                  Side-by-Side Architecture Topology
+                  Stacked Architecture Topology (Baseline V1 on Top, Target V2 on Bottom)
                 </span>
                 <span className="text-[11px] text-slate-500 hidden sm:inline">
-                  (Original Baseline vs Changed Target)
+                  (Full width with independent inspection)
                 </span>
               </div>
 
@@ -500,13 +652,13 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
             </div>
 
             {!isGraphCollapsed && (
-              <div className="p-3 grid grid-cols-1 lg:grid-cols-2 gap-3 bg-slate-100/70">
-                {/* Left Graph: Original / Baseline */}
-                <div className="flex flex-col h-[380px] rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
-                  <div className="px-3 py-2 bg-blue-50/70 border-b border-blue-100 flex items-center justify-between text-xs font-bold text-slate-700">
+              <div className="p-3 flex flex-col gap-4 bg-slate-100/70">
+                {/* Top Graph: Original / Baseline (V1) */}
+                <div className="flex flex-col h-[520px] rounded-xl border border-blue-200 bg-white overflow-hidden shadow-xs w-full">
+                  <div className="px-4 py-2 bg-blue-50/70 border-b border-blue-100 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-700">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="w-2.5 h-2.5 rounded-full bg-blue-600 shrink-0"></span>
-                      <span className="shrink-0">ORIGINAL / BASELINE (V1)</span>
+                      <span className="shrink-0">ORIGINAL / BASELINE ARCHITECTURE (V1)</span>
                       <span className="text-slate-500 font-mono text-[11px] font-normal truncate" title={comparisonResult.originalIdentity.filename}>
                         {comparisonResult.originalIdentity.filename}
                       </span>
@@ -515,7 +667,41 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       {comparisonResult.originalModel.entities.length} nodes • {comparisonResult.originalModel.relationships.length} edges
                     </span>
                   </div>
-                  <div className="flex-1 relative">
+
+                  {/* Compact Analysis Card for V1 */}
+                  <div className="px-4 py-1.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Total Components:</span>
+                        <span className="font-bold text-slate-700 font-mono">{comparisonResult.originalModel.entities.length}</span>
+                      </div>
+                      <span className="text-slate-300">|</span>
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Detected:</span>
+                        <span className="font-semibold text-slate-700">{v1ServicesCount} Services</span>,{' '}
+                        <span className="font-semibold text-slate-700">{v1ApisCount} APIs</span>,{' '}
+                        <span className="font-semibold text-slate-700">{v1DbsCount} Databases</span>
+                      </div>
+                      <span className="text-slate-300">|</span>
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Top Critical:</span>
+                        <span className="font-medium text-slate-700 font-mono truncate max-w-[220px]" title={v1CriticalNames}>{v1CriticalNames}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400 font-medium">Objective 2 Risk:</span>
+                      <span className={`font-bold font-mono px-2 py-0.5 rounded text-[10px] ${
+                        v1Level === 'CRITICAL' || v1Level === 'HIGH' ? 'bg-red-50 text-red-700 border border-red-200' :
+                        v1Level === 'MEDIUM' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                        'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      }`}>
+                        {v1Score}/100 [{v1Level}]
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 relative w-full">
                     <ArchitectureGraph
                       entities={comparisonResult.originalModel.entities}
                       relationships={comparisonResult.originalModel.relationships}
@@ -534,12 +720,12 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                   </div>
                 </div>
 
-                {/* Right Graph: Changed / Target */}
-                <div className="flex flex-col h-[380px] rounded-xl border border-slate-200 bg-white overflow-hidden shadow-2xs">
-                  <div className="px-3 py-2 bg-purple-50/70 border-b border-purple-100 flex items-center justify-between text-xs font-bold text-slate-700">
+                {/* Bottom Graph: Changed / Target (V2) */}
+                <div className="flex flex-col h-[520px] rounded-xl border border-purple-200 bg-white overflow-hidden shadow-xs w-full">
+                  <div className="px-4 py-2 bg-purple-50/70 border-b border-purple-100 flex flex-wrap items-center justify-between gap-2 text-xs font-bold text-slate-700">
                     <div className="flex items-center gap-2 min-w-0">
                       <span className="w-2.5 h-2.5 rounded-full bg-purple-600 shrink-0"></span>
-                      <span className="shrink-0">CHANGED / TARGET (V2)</span>
+                      <span className="shrink-0">CHANGED / TARGET ARCHITECTURE (V2)</span>
                       <span className="text-slate-500 font-mono text-[11px] font-normal truncate" title={comparisonResult.changedIdentity.filename}>
                         {comparisonResult.changedIdentity.filename}
                       </span>
@@ -548,7 +734,41 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       {comparisonResult.changedModel.entities.length} nodes • {comparisonResult.changedModel.relationships.length} edges
                     </span>
                   </div>
-                  <div className="flex-1 relative">
+
+                  {/* Compact Analysis Card for V2 */}
+                  <div className="px-4 py-1.5 bg-slate-50 border-b border-slate-200 flex flex-wrap items-center justify-between gap-2 text-[11px]">
+                    <div className="flex flex-wrap items-center gap-3">
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Total Components:</span>
+                        <span className="font-bold text-slate-700 font-mono">{comparisonResult.changedModel.entities.length}</span>
+                      </div>
+                      <span className="text-slate-300">|</span>
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Detected:</span>
+                        <span className="font-semibold text-slate-700">{v2ServicesCount} Services</span>,{' '}
+                        <span className="font-semibold text-slate-700">{v2ApisCount} APIs</span>,{' '}
+                        <span className="font-semibold text-slate-700">{v2DbsCount} Databases</span>
+                      </div>
+                      <span className="text-slate-300">|</span>
+                      <div>
+                        <span className="text-slate-400 font-medium mr-1">Top Critical:</span>
+                        <span className="font-medium text-slate-700 font-mono truncate max-w-[220px]" title={v2CriticalNames}>{v2CriticalNames}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-slate-400 font-medium">Objective 2 Risk:</span>
+                      <span className={`font-bold font-mono px-2 py-0.5 rounded text-[10px] ${
+                        v2Level === 'CRITICAL' || v2Level === 'HIGH' ? 'bg-red-50 text-red-700 border border-red-200' :
+                        v2Level === 'MEDIUM' ? 'bg-amber-50 text-amber-700 border border-amber-200' :
+                        'bg-emerald-50 text-emerald-700 border border-emerald-200'
+                      }`}>
+                        {v2Score}/100 [{v2Level}]
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="flex-1 relative w-full">
                     <ArchitectureGraph
                       entities={comparisonResult.changedModel.entities}
                       relationships={comparisonResult.changedModel.relationships}
@@ -571,7 +791,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
           </div>
 
           {/* Navigation Tabs */}
-          <div data-testid="compare-tabs" className="bg-white border-b border-slate-200 px-4 flex items-center gap-1 text-xs font-semibold overflow-x-auto">
+          <div data-testid="compare-tabs" className="sticky top-0 z-20 bg-white border-y border-slate-200 px-4 flex items-center gap-1 text-xs font-semibold overflow-x-auto shadow-xs">
             <button
               onClick={() => setActiveTab('repo_diff')}
               className={`px-3 py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
@@ -644,6 +864,24 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
               <span>Change Story</span>
             </button>
 
+            <button
+              data-testid="compare-tab-try-change"
+              onClick={() => setActiveTab('try_change')}
+              className={`px-3 py-2.5 border-b-2 transition-colors cursor-pointer flex items-center gap-1.5 ${
+                activeTab === 'try_change'
+                  ? 'border-purple-600 text-purple-700 font-bold'
+                  : 'border-transparent text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Sliders className="w-3.5 h-3.5 text-purple-600" />
+              <span>Try a Change (Simulator on V2)</span>
+              {sandboxStagedChanges.length > 0 && (
+                <span className="px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-700 text-[10px] font-mono font-bold">
+                  {sandboxStagedChanges.length}
+                </span>
+              )}
+            </button>
+
             {(comparisonResult.originalModel.rawJsonString || comparisonResult.changedModel.rawJsonString) && (
               <button
                 onClick={() => setActiveTab('json_payload')}
@@ -660,7 +898,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
           </div>
 
           {/* Active Tab Panel */}
-          <div className="flex-1 overflow-y-auto p-4">
+          <div className="w-full p-4 pb-16">
             {/* TAB 1: ARCHITECTURE DIFF */}
             {activeTab === 'arch_diff' && archDiff && (
               <div className="space-y-4 max-w-6xl mx-auto">
@@ -819,6 +1057,61 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                   </div>
                 </div>
 
+                {/* Level 1 Summary Metric Cards */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+                  <div
+                    onClick={() => setRepoFilter('added')}
+                    className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                      repoFilter === 'added' ? 'bg-emerald-50 border-emerald-400 ring-2 ring-emerald-200' : 'bg-slate-50 border-slate-200 hover:border-emerald-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-emerald-700">Added Files</div>
+                    <div className="text-2xl font-black text-emerald-600 mt-0.5 font-mono">
+                      +{repoDiff.summary.addedFilesCount}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">New in target archive</div>
+                  </div>
+
+                  <div
+                    onClick={() => setRepoFilter('removed')}
+                    className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                      repoFilter === 'removed' ? 'bg-red-50 border-red-400 ring-2 ring-red-200' : 'bg-slate-50 border-slate-200 hover:border-red-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-red-700">Removed Files</div>
+                    <div className="text-2xl font-black text-red-600 mt-0.5 font-mono">
+                      -{repoDiff.summary.removedFilesCount}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Missing in target archive</div>
+                  </div>
+
+                  <div
+                    onClick={() => setRepoFilter('modified')}
+                    className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                      repoFilter === 'modified' ? 'bg-amber-50 border-amber-400 ring-2 ring-amber-200' : 'bg-slate-50 border-slate-200 hover:border-amber-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-amber-700">Modified Files</div>
+                    <div className="text-2xl font-black text-amber-600 mt-0.5 font-mono">
+                      ~{repoDiff.summary.modifiedFilesCount}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Content or size altered</div>
+                  </div>
+
+                  <div
+                    onClick={() => setRepoFilter('unchanged')}
+                    className={`p-3 rounded-lg border transition-all cursor-pointer ${
+                      repoFilter === 'unchanged' ? 'bg-blue-50 border-blue-400 ring-2 ring-blue-200' : 'bg-slate-50 border-slate-200 hover:border-blue-300'
+                    }`}
+                  >
+                    <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">Unchanged Files</div>
+                    <div className="text-2xl font-black text-slate-700 mt-0.5 font-mono">
+                      ={repoDiff.summary.unchangedFilesCount}
+                    </div>
+                    <div className="text-[10px] text-slate-500 mt-0.5">Identical across archives</div>
+                  </div>
+                </div>
+
                 {/* Table */}
                 <div className="border border-slate-200 rounded-lg overflow-x-auto">
                   <table className="w-full text-left text-xs border-collapse">
@@ -954,29 +1247,42 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                 <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
                   <div>
                     <span className="text-[10px] font-black uppercase tracking-wider text-purple-400 block mb-1">
-                      STRUCTURAL RISK POSTURE
+                      STRUCTURAL RISK POSTURE (OBJECTIVE 2 DETERMINISTIC)
                     </span>
                     <h3 className="text-base font-bold text-white">{risk.attributionStatement}</h3>
+                    <div className="flex items-center gap-2 mt-1">
+                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
+                        riskDelta > 0
+                          ? 'bg-red-500/20 text-red-300 border border-red-500/30'
+                          : riskDelta < 0
+                          ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-slate-700 text-slate-300'
+                      }`}>
+                        {shiftDirection}
+                      </span>
+                    </div>
                   </div>
 
                   <div className="flex items-center gap-4">
                     <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block">Baseline Risk</span>
-                      <span className="text-lg font-mono font-bold">{risk.originalScore}/100</span>
+                      <span className="text-[10px] text-slate-400 block">Baseline Risk (V1)</span>
+                      <span className="text-lg font-mono font-bold">{v1Score}/100</span>
+                      <span className="text-[10px] text-slate-400 block font-semibold">[{v1Level}]</span>
                     </div>
                     <ArrowRight className="w-4 h-4 text-slate-500" />
                     <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block">Target Risk</span>
-                      <span className="text-lg font-mono font-bold text-purple-400">{risk.changedScore}/100</span>
+                      <span className="text-[10px] text-slate-400 block">Target Risk (V2)</span>
+                      <span className="text-lg font-mono font-bold text-purple-400">{v2Score}/100</span>
+                      <span className="text-[10px] text-purple-300 block font-semibold">[{v2Level}]</span>
                     </div>
                     <div className="text-center pl-3 border-l border-slate-800">
-                      <span className="text-[10px] text-slate-400 block">Net Delta</span>
+                      <span className="text-[10px] text-slate-400 block">Net Delta ($\Delta$)</span>
                       <span
                         className={`text-lg font-mono font-bold ${
-                          risk.delta > 0 ? 'text-red-400' : risk.delta < 0 ? 'text-emerald-400' : 'text-slate-300'
+                          riskDelta > 0 ? 'text-red-400' : riskDelta < 0 ? 'text-emerald-400' : 'text-slate-300'
                         }`}
                       >
-                        {risk.delta > 0 ? `+${risk.delta}` : risk.delta}
+                        {riskDelta > 0 ? `+${riskDelta}` : riskDelta}
                       </span>
                     </div>
                   </div>
@@ -1174,6 +1480,510 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                     </div>
                   ))}
                 </div>
+              </div>
+            )}
+
+            {/* TAB: TRY A CHANGE (SANDBOX SIMULATOR ON V2) */}
+            {activeTab === 'try_change' && (
+              <div className="space-y-6 max-w-6xl mx-auto">
+                {/* Header Banner */}
+                <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <span className="p-2 rounded-lg bg-purple-600 text-white">
+                      <Sliders className="w-5 h-5" />
+                    </span>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h3 className="text-sm font-bold text-white">
+                          In-Memory Sandbox Simulator (Target V2 Baseline)
+                        </h3>
+                        <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500/30 text-purple-300 border border-purple-400/30">
+                          Isolated Sandbox
+                        </span>
+                      </div>
+                      <p className="text-xs text-slate-400 mt-0.5">
+                        Simulate architectural modifications on the Changed Architecture (V2) in an isolated memory space. Baseline models (V1 and V2) and repository files remain 100% untouched.
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-slate-400 font-mono">
+                      Target: {comparisonResult.changedIdentity.filename} ({comparisonResult.changedModel.entities.length} nodes)
+                    </span>
+                  </div>
+                </div>
+
+                {/* Staging & Simulation Controls Grid */}
+                <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                  {/* Left Column: Form Controls (5 cols) */}
+                  <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                      <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Stage a Simulated Change
+                      </span>
+                      <span className="text-[10px] text-slate-400 font-mono">Step 1</span>
+                    </div>
+
+                    {/* Action Selector */}
+                    <div>
+                      <label className="block text-[11px] font-bold text-slate-700 uppercase mb-1">
+                        Change Type
+                      </label>
+                      <div className="grid grid-cols-2 gap-1.5 bg-slate-100 p-1 rounded-lg">
+                        <button
+                          type="button"
+                          onClick={() => setSandboxAction('remove_component')}
+                          className={`px-2 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                            sandboxAction === 'remove_component'
+                              ? 'bg-white text-rose-700 shadow-2xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Remove Component
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSandboxAction('add_component')}
+                          className={`px-2 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                            sandboxAction === 'add_component'
+                              ? 'bg-white text-emerald-700 shadow-2xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Add Component
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSandboxAction('add_dependency')}
+                          className={`px-2 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                            sandboxAction === 'add_dependency'
+                              ? 'bg-white text-blue-700 shadow-2xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Add Dependency
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSandboxAction('remove_dependency')}
+                          className={`px-2 py-1.5 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                            sandboxAction === 'remove_dependency'
+                              ? 'bg-white text-amber-700 shadow-2xs font-bold'
+                              : 'text-slate-600 hover:text-slate-900'
+                          }`}
+                        >
+                          Remove Dependency
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Conditional Form Fields */}
+                    {sandboxAction === 'remove_component' && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Component to Remove (from V2)
+                          </label>
+                          <select
+                            data-testid="sandbox-remove-comp-select"
+                            value={sandboxRemoveCompId}
+                            onChange={(e) => setSandboxRemoveCompId(e.target.value)}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+                          >
+                            {comparisonResult.changedModel.entities.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.name} ({e.type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <p className="text-[11px] text-slate-500 italic">
+                          Simulates decommissioning this component and removing all attached incoming and outgoing edges.
+                        </p>
+                      </div>
+                    )}
+
+                    {sandboxAction === 'add_component' && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Component Name
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g., audit-service"
+                            value={sandboxNewCompName}
+                            onChange={(e) => setSandboxNewCompName(e.target.value)}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Component Type
+                            </label>
+                            <select
+                              value={sandboxNewCompType}
+                              onChange={(e) => setSandboxNewCompType(e.target.value as ArchitectureEntity['type'])}
+                              className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                            >
+                              <option value="Service">Service</option>
+                              <option value="API">API Endpoint</option>
+                              <option value="Database">Database</option>
+                              <option value="Queue">Queue / Topic</option>
+                              <option value="External System">External System</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-xs font-semibold text-slate-700 mb-1">
+                              Technology
+                            </label>
+                            <input
+                              type="text"
+                              value={sandboxNewCompTech}
+                              onChange={(e) => setSandboxNewCompTech(e.target.value)}
+                              className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {sandboxAction === 'add_dependency' && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Source Component (Caller)
+                          </label>
+                          <select
+                            value={sandboxDepSource}
+                            onChange={(e) => setSandboxDepSource(e.target.value)}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                          >
+                            {comparisonResult.changedModel.entities.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.name} ({e.type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Target Component (Callee)
+                          </label>
+                          <select
+                            value={sandboxDepTarget}
+                            onChange={(e) => setSandboxDepTarget(e.target.value)}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                          >
+                            {comparisonResult.changedModel.entities.map((e) => (
+                              <option key={e.id} value={e.id}>
+                                {e.name} ({e.type})
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Relationship Type
+                          </label>
+                          <select
+                            value={sandboxDepType}
+                            onChange={(e) => setSandboxDepType(e.target.value as ArchitectureRelationship['type'])}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                          >
+                            <option value="CALLS">CALLS</option>
+                            <option value="USES">USES</option>
+                            <option value="QUERIES">QUERIES</option>
+                            <option value="CONNECTS_TO">CONNECTS_TO</option>
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {sandboxAction === 'remove_dependency' && (
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-xs font-semibold text-slate-700 mb-1">
+                            Dependency to Sever (from V2)
+                          </label>
+                          <select
+                            value={sandboxRemoveRelId}
+                            onChange={(e) => setSandboxRemoveRelId(e.target.value)}
+                            className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
+                          >
+                            {comparisonResult.changedModel.relationships.map((r) => {
+                              const s = comparisonResult.changedModel.entities.find((e) => e.id === r.source);
+                              const t = comparisonResult.changedModel.entities.find((e) => e.id === r.target);
+                              return (
+                                <option key={r.id} value={r.id}>
+                                  {s?.name || r.source} → {t?.name || r.target} ({r.type})
+                                </option>
+                              );
+                            })}
+                          </select>
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Stage Error Notification */}
+                    {sandboxError && (
+                      <div className="p-2.5 bg-red-50 border border-red-200 text-red-700 text-xs rounded-lg flex items-center gap-2">
+                        <AlertTriangle className="w-4 h-4 shrink-0 text-red-600" />
+                        <span>{sandboxError}</span>
+                      </div>
+                    )}
+
+                    {/* Stage Button */}
+                    <button
+                      type="button"
+                      data-testid="sandbox-stage-button"
+                      onClick={handleStageSandboxChange}
+                      className="w-full py-2 px-3 bg-purple-600 hover:bg-purple-700 text-white text-xs font-bold rounded-lg shadow-xs flex items-center justify-center gap-1.5 transition-colors cursor-pointer"
+                    >
+                      <Plus className="w-4 h-4" />
+                      <span>Stage Change</span>
+                    </button>
+                  </div>
+
+                  {/* Right Column: Staged Queue & Run Button (7 cols) */}
+                  <div className="lg:col-span-7 flex flex-col gap-4">
+                    <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs flex-1 flex flex-col">
+                      <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                            Staged Sandbox Queue
+                          </span>
+                          <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-purple-100 text-purple-700">
+                            {sandboxStagedChanges.length}
+                          </span>
+                        </div>
+                        {sandboxStagedChanges.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={handleClearSandboxStaged}
+                            className="text-xs text-rose-600 hover:text-rose-800 font-semibold cursor-pointer"
+                          >
+                            Clear All
+                          </button>
+                        )}
+                      </div>
+
+                      {sandboxStagedChanges.length === 0 ? (
+                        <div className="flex-1 flex flex-col items-center justify-center text-center p-8 text-slate-400">
+                          <Sliders className="w-8 h-8 mb-2 opacity-40 text-purple-600" />
+                          <p className="text-xs font-medium">No changes staged in sandbox yet.</p>
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            Select a change type on the left to stage modifications against V2.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="flex-1 space-y-2 max-h-56 overflow-y-auto mb-3">
+                          {sandboxStagedChanges.map((chg) => (
+                            <div
+                              key={chg.id}
+                              className="flex items-center justify-between p-2.5 rounded-lg border border-slate-200 bg-slate-50 text-xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <span
+                                  className={`w-2 h-2 rounded-full shrink-0 ${
+                                    chg.action.startsWith('remove') ? 'bg-rose-500' : 'bg-emerald-500'
+                                  }`}
+                                />
+                                <span className="font-semibold text-slate-800 truncate">
+                                  {chg.description}
+                                </span>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveSandboxStaged(chg.id)}
+                                className="text-slate-400 hover:text-rose-600 p-1 cursor-pointer"
+                                title="Remove staged change"
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+
+                      {/* Run Simulation Button */}
+                      <button
+                        type="button"
+                        data-testid="sandbox-run-button"
+                        onClick={handleRunSandboxSim}
+                        disabled={sandboxStagedChanges.length === 0}
+                        className={`w-full py-2.5 px-4 rounded-xl text-xs font-bold flex items-center justify-center gap-2 shadow-xs transition-colors cursor-pointer ${
+                          sandboxStagedChanges.length > 0
+                            ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                            : 'bg-slate-100 text-slate-400 cursor-not-allowed'
+                        }`}
+                      >
+                        <Play className="w-4 h-4 fill-current" />
+                        <span>Run Simulation on V2 Sandbox</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Simulation Results Display */}
+                {sandboxSimResult && (() => {
+                  const allAffectedNodes = [
+                    ...sandboxSimResult.directly_affected_nodes,
+                    ...sandboxSimResult.indirectly_affected_nodes,
+                  ];
+                  const brokenDeps = sandboxSimResult.broken_dependencies || [];
+                  const recChecks = sandboxSimResult.recommended_checks || [];
+                  const simShift =
+                    sandboxSimResult.risk_delta > 0
+                      ? 'Higher structural risk'
+                      : sandboxSimResult.risk_delta < 0
+                      ? 'Lower structural risk'
+                      : 'No structural risk change';
+
+                  return (
+                    <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs space-y-6">
+                      {/* Top Simulated Risk Banner */}
+                      <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
+                        <div>
+                          <span className="text-[10px] font-black uppercase tracking-wider text-purple-400 block mb-1">
+                            SANDBOX SIMULATION OUTCOME
+                          </span>
+                          <h3 className="text-base font-bold text-white">
+                            Target V2 Risk Score: {sandboxSimResult.current_risk_score}/100 → Simulated Risk: {sandboxSimResult.hypothetical_risk_score}/100
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-1">
+                            Direction: <span className="font-semibold text-purple-300">{simShift}</span> (Net $\Delta$: {sandboxSimResult.risk_delta > 0 ? `+${sandboxSimResult.risk_delta}` : sandboxSimResult.risk_delta} pts)
+                          </p>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <div className="text-center">
+                            <span className="text-[10px] text-slate-400 block">V2 Baseline</span>
+                            <span className="text-xl font-mono font-bold">{sandboxSimResult.current_risk_score}/100</span>
+                          </div>
+                          <ArrowRight className="w-4 h-4 text-slate-500" />
+                          <div className="text-center">
+                            <span className="text-[10px] text-slate-400 block">Hypothetical</span>
+                            <span className="text-xl font-mono font-bold text-purple-400">{sandboxSimResult.hypothetical_risk_score}/100</span>
+                          </div>
+                          <div className="text-center pl-3 border-l border-slate-800">
+                            <span className="text-[10px] text-slate-400 block">Net Shift</span>
+                            <span
+                              className={`text-xl font-mono font-bold ${
+                                sandboxSimResult.risk_delta > 0
+                                  ? 'text-red-400'
+                                  : sandboxSimResult.risk_delta < 0
+                                  ? 'text-emerald-400'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {sandboxSimResult.risk_delta > 0 ? `+${sandboxSimResult.risk_delta}` : sandboxSimResult.risk_delta}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Metric Cards Grid */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase">Blast Radius</div>
+                          <div className="text-xl font-black text-slate-900 font-mono mt-0.5">
+                            {allAffectedNodes.length}
+                          </div>
+                          <div className="text-[10px] text-slate-500">Components in ripple zone</div>
+                        </div>
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase">Broken Dependencies</div>
+                          <div className={`text-xl font-black font-mono mt-0.5 ${
+                            brokenDeps.length > 0 ? 'text-red-600' : 'text-emerald-600'
+                          }`}>
+                            {brokenDeps.length}
+                          </div>
+                          <div className="text-[10px] text-slate-500">Unresolved caller paths</div>
+                        </div>
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase">Changes Applied</div>
+                          <div className="text-xl font-black text-purple-600 font-mono mt-0.5">
+                            {sandboxStagedChanges.length}
+                          </div>
+                          <div className="text-[10px] text-slate-500">Staged sandbox mutations</div>
+                        </div>
+
+                        <div className="p-3 bg-slate-50 border border-slate-200 rounded-lg">
+                          <div className="text-[10px] font-bold text-slate-400 uppercase">Recommended Checks</div>
+                          <div className="text-xl font-black text-blue-600 font-mono mt-0.5">
+                            {recChecks.length}
+                          </div>
+                          <div className="text-[10px] text-slate-500">Suggested test targets</div>
+                        </div>
+                      </div>
+
+                      {/* Broken Dependencies Alert Banner */}
+                      {brokenDeps.length > 0 && (
+                        <div className="p-4 bg-red-50 border border-red-200 rounded-xl space-y-2">
+                          <div className="flex items-center gap-2 text-red-800 font-bold text-xs">
+                            <AlertTriangle className="w-4 h-4 text-red-600" />
+                            <span>Broken Architectural Dependencies ({brokenDeps.length})</span>
+                          </div>
+                          <p className="text-xs text-red-700">
+                            The simulated change removes components or severs edges that have active callers:
+                          </p>
+                          <div className="space-y-1.5 pt-1">
+                            {brokenDeps.map((b, idx) => (
+                              <div key={idx} className="p-2 bg-white rounded border border-red-200 text-xs flex items-center justify-between font-mono">
+                                <span className="text-slate-800 font-bold">{b.callerName}</span>
+                                <ArrowRight className="w-3.5 h-3.5 text-red-500" />
+                                <span className="text-red-700 line-through">{b.missingTargetName}</span>
+                                <span className="px-2 py-0.5 bg-red-100 text-red-800 rounded text-[10px] font-sans font-bold uppercase">
+                                  REQUIRED
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+
+                      {/* Affected Components & Recommended Checks Grid */}
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                        {/* Affected Components */}
+                        <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-2">
+                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                            <Activity className="w-4 h-4 text-purple-600" />
+                            <span>Affected Components ({allAffectedNodes.length})</span>
+                          </h4>
+                          <div className="space-y-1 max-h-56 overflow-y-auto">
+                            {allAffectedNodes.map((comp: ArchitectureEntity) => (
+                              <div key={comp.id} className="p-2 bg-white rounded border border-slate-200 text-xs flex items-center justify-between">
+                                <span className="font-bold text-slate-800">{comp.name}</span>
+                                <span className="text-[11px] text-slate-500 font-mono">{comp.type}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Recommended Regression Checks */}
+                        <div className="border border-slate-200 rounded-xl p-4 bg-slate-50/50 space-y-2">
+                          <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider flex items-center gap-2">
+                            <ShieldCheck className="w-4 h-4 text-emerald-600" />
+                            <span>Recommended Regression Checks</span>
+                          </h4>
+                          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+                            {recChecks.map((check, idx) => (
+                              <div key={idx} className="p-2 bg-white rounded border border-slate-200 text-xs flex items-start gap-2">
+                                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0 mt-0.5" />
+                                <span className="text-slate-700">{check}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             )}
 

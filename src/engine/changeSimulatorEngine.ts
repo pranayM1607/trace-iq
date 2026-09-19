@@ -188,8 +188,42 @@ export class ChangeSimulatorEngine {
     // 6. Causal Risk Ledger (deterministic structural-risk attribution)
     const causalRiskLedger: CausalRiskFactor[] = [];
 
-    // Coupling
+    // Broken Required Dependencies: Check if any removed component had callers that remain in hypothetical
+    const hypoEntityIds = new Set(hypoEntities.map((e) => e.id));
+    const brokenDependencies: Array<{ callerName: string; missingTargetName: string }> = [];
+
+    removedEntitiesRecord.forEach((remEntity) => {
+      const originalCallers = currentArchitecture.relationships
+        .filter((r) => r.target === remEntity.id)
+        .map((r) => r.source);
+
+      originalCallers.forEach((callerId) => {
+        if (hypoEntityIds.has(callerId)) {
+          const callerName = allKnownEntities.get(callerId)?.name || callerId;
+          brokenDependencies.push({
+            callerName,
+            missingTargetName: remEntity.name,
+          });
+        }
+      });
+    });
+
+    if (brokenDependencies.length > 0) {
+      const pts = Number((brokenDependencies.length * 15.0).toFixed(1));
+      causalRiskLedger.push({
+        factor: 'Broken Required Dependency Detected',
+        points: pts,
+        description: `Target component(s) removed while dependent caller(s) remain active: ${brokenDependencies
+          .map((b) => `"${b.callerName}" missing "${b.missingTargetName}"`)
+          .join(', ')}. Raises severe structural breakage and unresolvability risk.`,
+        evidenceCount: brokenDependencies.length,
+      });
+    }
+
+    // Coupling (excluding edges broken by removing required target)
     const deltaEdges = hypothetical.relationships.length - currentArchitecture.relationships.length;
+    const netPrunedEdges = Math.max(0, Math.abs(deltaEdges) - brokenDependencies.length);
+
     if (deltaEdges > 0) {
       causalRiskLedger.push({
         factor: 'Increased Outbound Coupling',
@@ -197,12 +231,12 @@ export class ChangeSimulatorEngine {
         description: `Added ${deltaEdges} new dependency link(s), increasing graph density and coordination complexity.`,
         evidenceCount: deltaEdges,
       });
-    } else if (deltaEdges < 0) {
+    } else if (netPrunedEdges > 0 && brokenDependencies.length === 0) {
       causalRiskLedger.push({
         factor: 'Reduced Dependency Coupling',
-        points: Number((deltaEdges * 3.5).toFixed(1)),
-        description: `Decommissioned ${Math.abs(deltaEdges)} dependency edge(s), decoupling architecture components.`,
-        evidenceCount: Math.abs(deltaEdges),
+        points: Number((-netPrunedEdges * 3.5).toFixed(1)),
+        description: `Decommissioned ${netPrunedEdges} dependency edge(s), decoupling architecture components.`,
+        evidenceCount: netPrunedEdges,
       });
     }
 
@@ -280,6 +314,11 @@ export class ChangeSimulatorEngine {
       });
     }
 
+    const ledgerSum = causalRiskLedger.reduce((sum, item) => sum + item.points, 0);
+    const hasBrokenDeps = causalRiskLedger.some((f) => f.factor === 'Broken Required Dependency Detected');
+    const effectiveDelta = hasBrokenDeps ? Number(ledgerSum.toFixed(1)) : riskDelta;
+    const effectiveHypoRisk = Math.min(100, Math.max(0, Number((currentRisk + effectiveDelta).toFixed(1))));
+
     // 7. Change Story narrative
     const changeStory: ChangeStoryStep[] = [
       {
@@ -300,10 +339,10 @@ export class ChangeSimulatorEngine {
       {
         step: 3,
         title: 'Structural Risk Shift',
-        description: `Modelled structural risk score transitioned from ${currentRisk} to ${hypotheticalRisk} (Net Delta: ${riskDelta > 0 ? `+${riskDelta}` : riskDelta}). ${
-          riskDelta > 0
-            ? 'Risk increased due to new architectural obligations.'
-            : riskDelta < 0
+        description: `Modelled structural risk score transitioned from ${currentRisk} to ${effectiveHypoRisk} (Net Delta: ${effectiveDelta > 0 ? `+${effectiveDelta}` : effectiveDelta}). ${
+          effectiveDelta > 0
+            ? 'Risk increased due to new architectural obligations or broken dependencies.'
+            : effectiveDelta < 0
             ? 'Risk reduced via architectural decoupling.'
             : 'Risk posture remains neutral.'
         }`,
@@ -317,6 +356,52 @@ export class ChangeSimulatorEngine {
       },
     ];
 
+    // 8. Recommended Checks based on detected dependencies
+    const recommendedChecks: string[] = [];
+
+    if (brokenDependencies.length > 0) {
+      brokenDependencies.forEach((b) => {
+        recommendedChecks.push(
+          `Refactor or update upstream caller "${b.callerName}" before removing "${b.missingTargetName}", or configure fallback stub/mock endpoints.`
+        );
+      });
+    }
+
+    if (deltaEdges > 0) {
+      recommendedChecks.push(
+        `Perform latency and retry tests on ${deltaEdges} new dependency integration(s).`
+      );
+    }
+
+    if (newSpofIds.length > 0) {
+      const names = newSpofIds.map((id) => allKnownEntities.get(id)?.name || id).join(', ');
+      recommendedChecks.push(
+        `Introduce redundant secondary failover or load balancing for newly introduced Single Point of Failure (${names}).`
+      );
+    }
+
+    if (deltaCycles > 0) {
+      recommendedChecks.push(
+        `Decouple circular dependency loop using asynchronous event queues or Mediator pattern.`
+      );
+    }
+
+    if (deltaExt > 0) {
+      recommendedChecks.push(
+        `Configure circuit breakers, timeout budgets, and SLA alert monitors for new external boundary system(s).`
+      );
+    }
+
+    if (recommendedChecks.length === 0) {
+      recommendedChecks.push(
+        `Run standard regression integration tests to confirm architecture stability.`
+      );
+    }
+
+    const whyRiskChanged = causalRiskLedger.length > 0
+      ? causalRiskLedger.map((item) => `${item.factor}: ${item.description} (${item.points > 0 ? `+${item.points}` : item.points} pts)`).join('; ')
+      : 'No structural risk regressions or improvements detected.';
+
     return {
       current_architecture: currentArchitecture,
       hypothetical_architecture: hypothetical,
@@ -326,10 +411,13 @@ export class ChangeSimulatorEngine {
       indirectly_affected_nodes: indirectlyAffectedEntities,
       propagation_paths: uniquePropagationPaths,
       current_risk_score: currentRisk,
-      hypothetical_risk_score: hypotheticalRisk,
-      risk_delta: riskDelta,
+      hypothetical_risk_score: effectiveHypoRisk,
+      risk_delta: effectiveDelta,
       causal_risk_ledger: causalRiskLedger,
       change_story: changeStory,
+      broken_dependencies: brokenDependencies,
+      recommended_checks: recommendedChecks,
+      why_risk_changed: whyRiskChanged,
     };
   }
 }

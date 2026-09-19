@@ -13,7 +13,6 @@ import { RepositoryInventoryPage } from './components/pages/RepositoryInventoryP
 import { RiskAnalysisPage } from './components/pages/RiskAnalysisPage';
 import { ImpactAnalysisPage } from './components/pages/ImpactAnalysisPage';
 import { EvidencePage } from './components/pages/EvidencePage';
-import { SnapshotsPage } from './components/pages/SnapshotsPage';
 import { ReportsPage } from './components/pages/ReportsPage';
 import { ChangeSimulatorPage } from './components/pages/ChangeSimulatorPage';
 
@@ -24,17 +23,15 @@ import { ScenarioSwitcherModal } from './components/input/ScenarioSwitcherModal'
 import { CodebaseInventoryModal } from './components/inventory/CodebaseInventoryModal';
 
 import { DEMO_ARCHITECTURE } from './data/demoArchitecture';
-import { SNAPSHOT_V1, SNAPSHOT_V2 } from './data/sampleEvolutions';
 import type { SampleBlueprintItem } from './data/sampleBlueprints';
 import type { BlueprintParseResult } from './engine/blueprintParser';
 import type { CodebaseAnalysisResult } from './engine/codebaseAnalyzer';
 import { reconstructArchitecture } from './engine/architectureReconstructor';
-import { createArchitectureSnapshot } from './engine/architectureDiffEngine';
 import type {
+  ArchitectureComparisonResult,
   ArchitectureEntity,
   ArchitectureModel,
   ArchitectureRelationship,
-  ArchitectureSnapshot,
   ProcessingStep,
 } from './types/architecture';
 import { FileCode, X } from 'lucide-react';
@@ -58,12 +55,13 @@ export const App: React.FC = () => {
   const [isProcessing, setIsProcessing] = useState(false);
   const [pipelineSteps, setPipelineSteps] = useState<ProcessingStep[]>(INITIAL_PIPELINE_STEPS);
 
-  // Versioning & Snapshots State
-  const [snapshots, setSnapshots] = useState<ArchitectureSnapshot[]>([
-    SNAPSHOT_V1,
-    SNAPSHOT_V2,
-  ]);
-  const [activeSnapshotId, setActiveSnapshotId] = useState<string>(SNAPSHOT_V1.id);
+  // Persisted Compare State across page navigation
+  const [persistedComparison, setPersistedComparison] = useState<ArchitectureComparisonResult | null>(null);
+  const [persistedOrigFile, setPersistedOrigFile] = useState<File | null>(null);
+  const [persistedChgFile, setPersistedChgFile] = useState<File | null>(null);
+  const [persistedActiveTab, setPersistedActiveTab] = useState<
+    'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload'
+  >('repo_diff');
 
   // Assistant & Search State
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
@@ -123,8 +121,6 @@ export const App: React.FC = () => {
   // Action: Load Default Demo Architecture
   const handleLoadDemo = useCallback(() => {
     executePipelineSequence(DEMO_ARCHITECTURE);
-    setSnapshots([SNAPSHOT_V1, SNAPSHOT_V2]);
-    setActiveSnapshotId(SNAPSHOT_V1.id);
   }, [executePipelineSequence]);
 
   // Action: Apply Blueprint JSON
@@ -233,46 +229,6 @@ export const App: React.FC = () => {
     [executePipelineSequence]
   );
 
-  // Action: Select Active Snapshot
-  const handleSelectActiveSnapshot = useCallback(
-    (id: string) => {
-      setActiveSnapshotId(id);
-      if (!id) {
-        return;
-      }
-      const found = snapshots.find((s) => s.id === id);
-      if (found) {
-        setModel(found.architecture);
-        setSelectedEntityId(null);
-        setSelectedEdgeId(null);
-      }
-    },
-    [snapshots]
-  );
-
-  // Action: Save Current Snapshot (Frozen, deep-copied)
-  const handleSaveSnapshot = useCallback(
-    (label: string) => {
-      const snap = createArchitectureSnapshot(model, label);
-      setSnapshots((prev) => [...prev, snap]);
-      setActiveSnapshotId(snap.id);
-    },
-    [model]
-  );
-
-  // Action: Rename Snapshot
-  const handleRenameSnapshot = useCallback((id: string, newLabel: string) => {
-    setSnapshots((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, label: newLabel } : s))
-    );
-  }, []);
-
-  // Action: Delete Snapshot
-  const handleDeleteSnapshot = useCallback((id: string) => {
-    setSnapshots((prev) => prev.filter((s) => s.id !== id));
-    setActiveSnapshotId((prevId) => (prevId === id ? '' : prevId));
-  }, []);
-
   // Reset to default
   const handleReset = useCallback(() => {
     handleLoadDemo();
@@ -301,7 +257,7 @@ export const App: React.FC = () => {
       />
 
       {/* 2. Main Content Area */}
-      <div className="flex-1 flex flex-col h-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 overflow-hidden">
         {/* Top Header Bar */}
         <TopHeader
           currentRoute={currentRoute}
@@ -317,25 +273,30 @@ export const App: React.FC = () => {
         />
 
         {/* View Routing */}
-        <main className="flex-1 flex flex-col overflow-hidden relative">
+        <main className="flex-1 flex flex-col min-h-0 overflow-hidden relative">
           {currentRoute === 'analyze' && (
             <AnalyzePage
               model={model}
-              snapshots={snapshots}
               isProcessing={isProcessing}
               pipelineSteps={pipelineSteps}
               onNavigate={setCurrentRoute}
               onOpenCodebaseModal={() => setIsCodebaseModalOpen(true)}
               onOpenBlueprintModal={() => setIsBlueprintModalOpen(true)}
               onOpenScenarioModal={() => setIsScenarioModalOpen(true)}
-              onSaveSnapshot={handleSaveSnapshot}
               onOpenRawPayload={model.rawJsonString ? () => setIsRawPayloadModalOpen(true) : undefined}
             />
           )}
 
           {currentRoute === 'compare' && (
             <ComparePage
-              savedSnapshots={snapshots}
+              persistedComparison={persistedComparison}
+              onSetPersistedComparison={setPersistedComparison}
+              persistedOrigFile={persistedOrigFile}
+              onSetPersistedOrigFile={setPersistedOrigFile}
+              persistedChgFile={persistedChgFile}
+              onSetPersistedChgFile={setPersistedChgFile}
+              persistedActiveTab={persistedActiveTab}
+              onSetPersistedActiveTab={setPersistedActiveTab}
               onSelectEntity={(id) => {
                 setSelectedEntityId(id);
                 setCurrentRoute('architecture');
@@ -343,26 +304,9 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute === 'snapshots' && (
-            <SnapshotsPage
-              model={model}
-              snapshots={snapshots}
-              activeSnapshotId={activeSnapshotId}
-              onSelectActiveSnapshot={handleSelectActiveSnapshot}
-              onSaveSnapshot={handleSaveSnapshot}
-              onRenameSnapshot={handleRenameSnapshot}
-              onDeleteSnapshot={handleDeleteSnapshot}
-              onNavigate={setCurrentRoute}
-            />
-          )}
-
           {currentRoute === 'architecture' && (
             <ArchitecturePage
               model={model}
-              snapshots={snapshots}
-              activeSnapshotId={activeSnapshotId}
-              onSelectActiveSnapshot={handleSelectActiveSnapshot}
-              onSaveSnapshot={handleSaveSnapshot}
               currentEntities={currentEntities}
               currentRelationships={currentRelationships}
               selectedEntityId={selectedEntityId}
@@ -412,9 +356,7 @@ export const App: React.FC = () => {
           {currentRoute === 'simulator' && (
             <ChangeSimulatorPage
               model={model}
-              snapshots={snapshots}
               onNavigate={setCurrentRoute}
-              onSaveSnapshot={handleSaveSnapshot}
             />
           )}
 
@@ -429,7 +371,6 @@ export const App: React.FC = () => {
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
         model={model}
-        snapshots={snapshots}
         onNavigate={setCurrentRoute}
         onSelectEntity={setSelectedEntityId}
         onSelectEdge={setSelectedEdgeId}
@@ -496,7 +437,6 @@ export const App: React.FC = () => {
         model={model}
         selectedEntity={selectedEntity}
         selectedRelationship={selectedRelationship}
-        snapshots={snapshots}
         onNavigate={setCurrentRoute}
       />
     </div>

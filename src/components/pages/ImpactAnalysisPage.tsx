@@ -134,23 +134,29 @@ export const ImpactAnalysisPage: React.FC<ImpactAnalysisPageProps> = ({
         {/* Metrics Grid */}
         <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
           {/* Total Blast Radius */}
-          <div className="bg-white p-4 rounded-xl border border-rose-200 shadow-2xs">
-            <div className="text-xs text-rose-700 font-bold uppercase">Upstream Blast Radius</div>
+          <div
+            className="bg-white p-4 rounded-xl border border-rose-200 shadow-2xs"
+            title="Services that depend on this component (directly or transitively) and would be impacted if this component is altered or fails."
+          >
+            <div className="text-xs text-rose-700 font-bold uppercase">Impacted Services (Blast Radius)</div>
             <div className="text-2xl font-extrabold text-rose-900 mt-1 font-mono">
               {targetMetrics?.upstream_callers_count || 0}
               <span className="text-xs font-normal text-rose-600"> Callers</span>
             </div>
             <div className="text-[11px] text-rose-600 mt-0.5">
-              {targetMetrics?.direct_callers_count || 0} direct + {Math.max(0, (targetMetrics?.upstream_callers_count || 0) - (targetMetrics?.direct_callers_count || 0))} indirect
+              {targetMetrics?.direct_callers_count || 0} direct callers + {Math.max(0, (targetMetrics?.upstream_callers_count || 0) - (targetMetrics?.direct_callers_count || 0))} transitive
             </div>
           </div>
 
           {/* Downstream Dependencies */}
-          <div className="bg-white p-4 rounded-xl border border-indigo-200 shadow-2xs">
-            <div className="text-xs text-indigo-700 font-bold uppercase">Downstream Targets</div>
+          <div
+            className="bg-white p-4 rounded-xl border border-indigo-200 shadow-2xs"
+            title="External services, databases, or modules that this component calls to perform its function."
+          >
+            <div className="text-xs text-indigo-700 font-bold uppercase">Required Outbound Dependencies</div>
             <div className="text-2xl font-extrabold text-indigo-900 mt-1 font-mono">
               {targetMetrics?.downstream_dependents_count || 0}
-              <span className="text-xs font-normal text-indigo-600"> Dependencies</span>
+              <span className="text-xs font-normal text-indigo-600"> Targets</span>
             </div>
             <div className="text-[11px] text-indigo-600 mt-0.5">
               {targetMetrics?.direct_dependencies_count || 0} direct dependencies
@@ -158,18 +164,24 @@ export const ImpactAnalysisPage: React.FC<ImpactAnalysisPageProps> = ({
           </div>
 
           {/* Max Propagation Depth */}
-          <div className="bg-white p-4 rounded-xl border border-purple-200 shadow-2xs">
-            <div className="text-xs text-purple-700 font-bold uppercase">Max Propagation Depth</div>
+          <div
+            className="bg-white p-4 rounded-xl border border-purple-200 shadow-2xs"
+            title="The maximum number of service hops through which a failure or change here can ripple."
+          >
+            <div className="text-xs text-purple-700 font-bold uppercase">Longest Ripple Chain</div>
             <div className="text-2xl font-extrabold text-purple-900 mt-1 font-mono">
               {targetMetrics?.max_propagation_depth || 0}
               <span className="text-xs font-normal text-purple-600"> Hops</span>
             </div>
-            <div className="text-[11px] text-purple-600 mt-0.5">Longest upstream ripple trail</div>
+            <div className="text-[11px] text-purple-600 mt-0.5">Maximum ripple distance</div>
           </div>
 
           {/* Cascade Risk Rating */}
-          <div className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs">
-            <div className="text-xs text-slate-500 font-bold uppercase">Cascade Risk Rating</div>
+          <div
+            className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs"
+            title="Overall cascading failure severity based on the number of dependent callers and propagation depth."
+          >
+            <div className="text-xs text-slate-500 font-bold uppercase">Cascade Severity</div>
             <div className="text-2xl font-extrabold text-slate-900 mt-1">
               {(targetMetrics?.upstream_callers_count || 0) >= 4
                 ? 'CRITICAL'
@@ -177,7 +189,7 @@ export const ImpactAnalysisPage: React.FC<ImpactAnalysisPageProps> = ({
                 ? 'ELEVATED'
                 : 'LOW'}
             </div>
-            <div className="text-[11px] text-slate-500 mt-0.5">Based on upstream dependency fan-in</div>
+            <div className="text-[11px] text-slate-500 mt-0.5">Based on dependent service fan-in</div>
           </div>
         </div>
       </div>

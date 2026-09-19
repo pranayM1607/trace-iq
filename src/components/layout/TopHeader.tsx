@@ -60,7 +60,6 @@ export const TopHeader: React.FC<TopHeaderProps> = ({
   const routeBreadcrumbMap: Record<NavRoute, { section: string; title: string }> = {
     analyze: { section: 'Overview', title: 'Analyze Workspace' },
     compare: { section: 'Overview', title: 'Compare Architectures' },
-    snapshots: { section: 'Overview', title: 'Snapshot Versions' },
     architecture: { section: 'Architecture', title: 'Architecture Graph Canvas' },
     dependencies: { section: 'Architecture', title: 'Dependencies & Protocols' },
     inventory: { section: 'Architecture', title: '100% Repository Inventory' },
