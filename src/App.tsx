@@ -62,6 +62,8 @@ export const App: React.FC = () => {
   const [persistedActiveTab, setPersistedActiveTab] = useState<
     'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload'
   >('repo_diff');
+  const [persistedCompareDirection, setPersistedCompareDirection] = useState<'v1_to_v2' | 'v2_to_v1'>('v1_to_v2');
+  const [persistedSimulationTarget, setPersistedSimulationTarget] = useState<'v1' | 'v2'>('v2');
 
   // Assistant & Search State
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
@@ -297,6 +299,10 @@ export const App: React.FC = () => {
               onSetPersistedChgFile={setPersistedChgFile}
               persistedActiveTab={persistedActiveTab}
               onSetPersistedActiveTab={setPersistedActiveTab}
+              persistedCompareDirection={persistedCompareDirection}
+              onSetPersistedCompareDirection={setPersistedCompareDirection}
+              persistedSimulationTarget={persistedSimulationTarget}
+              onSetPersistedSimulationTarget={setPersistedSimulationTarget}
               onSelectEntity={(id) => {
                 setSelectedEntityId(id);
                 setCurrentRoute('architecture');
@@ -438,6 +444,9 @@ export const App: React.FC = () => {
         selectedEntity={selectedEntity}
         selectedRelationship={selectedRelationship}
         onNavigate={setCurrentRoute}
+        comparisonResult={persistedComparison}
+        compareDirection={persistedCompareDirection}
+        simulationTarget={persistedSimulationTarget}
       />
     </div>
   );

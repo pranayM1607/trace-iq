@@ -31,7 +31,7 @@ import type {
   ProposedChange,
   ChangeSimulationResult,
 } from '../../types/architecture';
-import { compareRealInputs } from '../../engine/directCompareEngine';
+import { compareRealInputs, compareRealModels } from '../../engine/directCompareEngine';
 import { ArchitectureGraph } from '../graph/ArchitectureGraph';
 import { Objective2AnalysisEngine } from '../../engine/objective2AnalysisEngine';
 import { ChangeSimulatorEngine } from '../../engine/changeSimulatorEngine';
@@ -46,6 +46,10 @@ interface DirectCompareViewProps {
   onSetPersistedChgFile?: (file: File | null) => void;
   persistedActiveTab?: 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload';
   onSetPersistedActiveTab?: (tab: 'repo_diff' | 'arch_diff' | 'impact' | 'risk' | 'evidence' | 'story' | 'try_change' | 'json_payload') => void;
+  persistedCompareDirection?: 'v1_to_v2' | 'v2_to_v1';
+  onSetPersistedCompareDirection?: (dir: 'v1_to_v2' | 'v2_to_v1') => void;
+  persistedSimulationTarget?: 'v1' | 'v2';
+  onSetPersistedSimulationTarget?: (target: 'v1' | 'v2') => void;
 }
 
 export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
@@ -58,6 +62,10 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
   onSetPersistedChgFile,
   persistedActiveTab = 'repo_diff',
   onSetPersistedActiveTab,
+  persistedCompareDirection,
+  onSetPersistedCompareDirection,
+  persistedSimulationTarget,
+  onSetPersistedSimulationTarget,
 }) => {
   // Upload files state
   const [origFile, setOrigFileInternal] = useState<File | null>(persistedOrigFile || null);
@@ -94,6 +102,31 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
     if (onSetPersistedActiveTab) onSetPersistedActiveTab(t);
   };
 
+  // Synchronize persisted props across route navigation
+  useEffect(() => {
+    if (persistedComparison !== undefined && persistedComparison !== comparisonResult) {
+      setComparisonResultInternal(persistedComparison);
+    }
+  }, [persistedComparison]);
+
+  useEffect(() => {
+    if (persistedOrigFile !== undefined && persistedOrigFile !== origFile) {
+      setOrigFileInternal(persistedOrigFile);
+    }
+  }, [persistedOrigFile]);
+
+  useEffect(() => {
+    if (persistedChgFile !== undefined && persistedChgFile !== chgFile) {
+      setChgFileInternal(persistedChgFile);
+    }
+  }, [persistedChgFile]);
+
+  useEffect(() => {
+    if (persistedActiveTab !== undefined && persistedActiveTab !== activeTab) {
+      setActiveTabInternal(persistedActiveTab);
+    }
+  }, [persistedActiveTab]);
+
   // Repo filter
   const [repoFilter, setRepoFilter] = useState<'all' | 'added' | 'removed' | 'modified' | 'unchanged'>('all');
 
@@ -118,13 +151,50 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
     }
   };
 
-  const archDiff = comparisonResult?.architectureDiff;
-  const repoDiff = comparisonResult?.repositoryDiff;
-  const impact = comparisonResult?.impactAnalysis;
-  const risk = comparisonResult?.structuralRisk;
-  const story = comparisonResult?.changeStory;
+  // Direction state (V1 -> V2 or V2 -> V1)
+  const [compareDirection, setCompareDirectionInternal] = useState<'v1_to_v2' | 'v2_to_v1'>(
+    persistedCompareDirection || 'v1_to_v2'
+  );
+  const setCompareDirection = (d: 'v1_to_v2' | 'v2_to_v1') => {
+    setCompareDirectionInternal(d);
+    if (onSetPersistedCompareDirection) onSetPersistedCompareDirection(d);
+  };
 
-  // Objective 2 deterministic risk analyses for V1 and V2
+  useEffect(() => {
+    if (persistedCompareDirection && persistedCompareDirection !== compareDirection) {
+      setCompareDirectionInternal(persistedCompareDirection);
+    }
+  }, [persistedCompareDirection]);
+
+  // Simulation Target state (V1 or V2)
+  const [simulationTarget, setSimulationTargetInternal] = useState<'v1' | 'v2'>(
+    persistedSimulationTarget || 'v2'
+  );
+  const setSimulationTarget = (t: 'v1' | 'v2') => {
+    setSimulationTargetInternal(t);
+    if (onSetPersistedSimulationTarget) onSetPersistedSimulationTarget(t);
+  };
+
+  useEffect(() => {
+    if (persistedSimulationTarget && persistedSimulationTarget !== simulationTarget) {
+      setSimulationTargetInternal(persistedSimulationTarget);
+    }
+  }, [persistedSimulationTarget]);
+
+  // Derive active comparison deterministically without duplicating architecture data
+  const activeComparison = useMemo(() => {
+    if (!comparisonResult) return null;
+    if (compareDirection === 'v1_to_v2') return comparisonResult;
+    return compareRealModels(comparisonResult.changedModel, comparisonResult.originalModel);
+  }, [comparisonResult, compareDirection]);
+
+  const archDiff = activeComparison?.architectureDiff;
+  const repoDiff = activeComparison?.repositoryDiff;
+  const impact = activeComparison?.impactAnalysis;
+  const risk = activeComparison?.structuralRisk;
+  const story = activeComparison?.changeStory;
+
+  // Objective 2 deterministic risk analyses for V1 and V2 independently
   const v1Analysis = useMemo(() => {
     if (!comparisonResult?.originalModel) return null;
     return Objective2AnalysisEngine.analyzeArchitecture(comparisonResult.originalModel, 'v1-baseline');
@@ -146,12 +216,20 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
   const v1Level = useMemo(() => Objective2AnalysisEngine.getRiskLevel(v1Score), [v1Score]);
   const v2Level = useMemo(() => Objective2AnalysisEngine.getRiskLevel(v2Score), [v2Score]);
 
-  const riskDelta = useMemo(() => Number((v2Score - v1Score).toFixed(1)), [v1Score, v2Score]);
+  // Directional Risk Delta: Delta(V1 -> V2) = Risk(V2) - Risk(V1), Delta(V2 -> V1) = Risk(V1) - Risk(V2)
+  const directionalRiskDelta = useMemo(() => {
+    if (compareDirection === 'v1_to_v2') {
+      return Number((v2Score - v1Score).toFixed(1));
+    } else {
+      return Number((v1Score - v2Score).toFixed(1));
+    }
+  }, [compareDirection, v1Score, v2Score]);
+
   const shiftDirection = useMemo(() => {
-    if (riskDelta > 0) return 'Higher structural risk';
-    if (riskDelta < 0) return 'Lower structural risk';
+    if (directionalRiskDelta > 0) return 'Higher structural risk';
+    if (directionalRiskDelta < 0) return 'Lower structural risk';
     return 'No structural risk change';
-  }, [riskDelta]);
+  }, [directionalRiskDelta]);
 
   // Breakdown metrics for V1
   const v1ServicesCount = useMemo(() => {
@@ -187,7 +265,20 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
     return v2Analysis?.critical_components.slice(0, 3).map((c) => c.name).join(', ') || 'None';
   }, [v2Analysis]);
 
-  // Sandbox simulation state on V2
+  // Active base model for simulation (either V1 or V2 in isolated memory space)
+  const simBaseModel = useMemo(() => {
+    if (!comparisonResult) return null;
+    return simulationTarget === 'v1' ? comparisonResult.originalModel : comparisonResult.changedModel;
+  }, [comparisonResult, simulationTarget]);
+
+  const simTargetFilename = useMemo(() => {
+    if (!comparisonResult) return '';
+    return simulationTarget === 'v1'
+      ? comparisonResult.originalIdentity.filename
+      : comparisonResult.changedIdentity.filename;
+  }, [comparisonResult, simulationTarget]);
+
+  // Sandbox simulation state
   const [sandboxAction, setSandboxAction] = useState<'remove_component' | 'add_component' | 'add_dependency' | 'remove_dependency'>('remove_component');
   const [sandboxRemoveCompId, setSandboxRemoveCompId] = useState<string>('');
   const [sandboxNewCompName, setSandboxNewCompName] = useState<string>('');
@@ -201,35 +292,41 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
   const [sandboxSimResult, setSandboxSimResult] = useState<ChangeSimulationResult | null>(null);
   const [sandboxError, setSandboxError] = useState<string | null>(null);
 
-  // Initialize sandbox dropdown selections when changedModel is present
+  // Initialize sandbox dropdown selections when simBaseModel changes
   useEffect(() => {
-    const v2Entities = comparisonResult?.changedModel.entities || [];
-    const v2Rels = comparisonResult?.changedModel.relationships || [];
-    if (v2Entities.length > 0) {
-      if (!sandboxRemoveCompId) setSandboxRemoveCompId(v2Entities[0].id);
-      if (!sandboxDepSource) setSandboxDepSource(v2Entities[0].id);
-      if (!sandboxDepTarget && v2Entities.length > 1) setSandboxDepTarget(v2Entities[1].id);
+    const simEntities = simBaseModel?.entities || [];
+    const simRels = simBaseModel?.relationships || [];
+    if (simEntities.length > 0) {
+      if (!sandboxRemoveCompId || !simEntities.some((e) => e.id === sandboxRemoveCompId)) {
+        setSandboxRemoveCompId(simEntities[0].id);
+      }
+      if (!sandboxDepSource || !simEntities.some((e) => e.id === sandboxDepSource)) {
+        setSandboxDepSource(simEntities[0].id);
+      }
+      if (!sandboxDepTarget || !simEntities.some((e) => e.id === sandboxDepTarget)) {
+        setSandboxDepTarget(simEntities.length > 1 ? simEntities[1].id : simEntities[0].id);
+      }
     }
-    if (v2Rels.length > 0 && !sandboxRemoveRelId) {
-      setSandboxRemoveRelId(v2Rels[0].id);
+    if (simRels.length > 0 && (!sandboxRemoveRelId || !simRels.some((r) => r.id === sandboxRemoveRelId))) {
+      setSandboxRemoveRelId(simRels[0].id);
     }
-  }, [comparisonResult?.changedModel, sandboxRemoveCompId, sandboxDepSource, sandboxDepTarget, sandboxRemoveRelId]);
+  }, [simBaseModel]);
 
   const handleStageSandboxChange = () => {
     setSandboxError(null);
-    const v2Entities = comparisonResult?.changedModel.entities || [];
-    const v2Rels = comparisonResult?.changedModel.relationships || [];
+    const simEntities = simBaseModel?.entities || [];
+    const simRels = simBaseModel?.relationships || [];
 
     if (sandboxAction === 'remove_component') {
       if (!sandboxRemoveCompId) {
-        setSandboxError('Please select a component to remove.');
+        setSandboxError(`Please select a component to remove from ${simulationTarget.toUpperCase()}.`);
         return;
       }
-      const targetEntity = v2Entities.find((e) => e.id === sandboxRemoveCompId);
+      const targetEntity = simEntities.find((e) => e.id === sandboxRemoveCompId);
       const newChange: ProposedChange = {
         id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         action: 'remove_component',
-        description: `Remove Component '${targetEntity?.name || sandboxRemoveCompId}'`,
+        description: `Remove Component '${targetEntity?.name || sandboxRemoveCompId}' (from ${simulationTarget.toUpperCase()})`,
         component_id: sandboxRemoveCompId,
       };
       setSandboxStagedChanges((prev) => [...prev, newChange]);
@@ -243,7 +340,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
       const newChange: ProposedChange = {
         id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         action: 'add_component',
-        description: `Add ${sandboxNewCompType} '${sandboxNewCompName}' (${sandboxNewCompTech})`,
+        description: `Add ${sandboxNewCompType} '${sandboxNewCompName}' (${sandboxNewCompTech}) to ${simulationTarget.toUpperCase()}`,
         component: {
           id: newCompId,
           name: sandboxNewCompName.trim(),
@@ -265,12 +362,12 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
         setSandboxError('Source and target cannot be the same component.');
         return;
       }
-      const src = v2Entities.find((e) => e.id === sandboxDepSource);
-      const tgt = v2Entities.find((e) => e.id === sandboxDepTarget);
+      const src = simEntities.find((e) => e.id === sandboxDepSource);
+      const tgt = simEntities.find((e) => e.id === sandboxDepTarget);
       const newChange: ProposedChange = {
         id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         action: 'add_dependency',
-        description: `Add Dependency: '${src?.name || sandboxDepSource}' -> '${tgt?.name || sandboxDepTarget}' (${sandboxDepType})`,
+        description: `Add Dependency: '${src?.name || sandboxDepSource}' -> '${tgt?.name || sandboxDepTarget}' (${sandboxDepType}) on ${simulationTarget.toUpperCase()}`,
         relationship: {
           id: `rel-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
           source: sandboxDepSource,
@@ -284,16 +381,16 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
       setSandboxSimResult(null);
     } else if (sandboxAction === 'remove_dependency') {
       if (!sandboxRemoveRelId) {
-        setSandboxError('Please select a dependency to remove.');
+        setSandboxError(`Please select a dependency to remove from ${simulationTarget.toUpperCase()}.`);
         return;
       }
-      const matched = v2Rels.find((r) => r.id === sandboxRemoveRelId);
-      const src = v2Entities.find((e) => e.id === matched?.source);
-      const tgt = v2Entities.find((e) => e.id === matched?.target);
+      const matched = simRels.find((r) => r.id === sandboxRemoveRelId);
+      const src = simEntities.find((e) => e.id === matched?.source);
+      const tgt = simEntities.find((e) => e.id === matched?.target);
       const newChange: ProposedChange = {
         id: `chg-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
         action: 'remove_dependency',
-        description: `Remove Dependency: '${src?.name || matched?.source}' -> '${tgt?.name || matched?.target}'`,
+        description: `Remove Dependency: '${src?.name || matched?.source}' -> '${tgt?.name || matched?.target}' (from ${simulationTarget.toUpperCase()})`,
         relationship_id: sandboxRemoveRelId,
       };
       setSandboxStagedChanges((prev) => [...prev, newChange]);
@@ -313,18 +410,18 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
   };
 
   const handleRunSandboxSim = () => {
-    if (!comparisonResult?.changedModel) return;
+    if (!simBaseModel) return;
     if (sandboxStagedChanges.length === 0) {
       setSandboxError('Please stage at least one change before running simulation.');
       return;
     }
     setSandboxError(null);
     try {
-      // In-memory isolated simulation on V2
+      // In-memory isolated simulation strictly on selected target (zero mutation to original/changed models)
       const result = ChangeSimulatorEngine.simulateChange(
-        comparisonResult.changedModel,
+        simBaseModel,
         sandboxStagedChanges,
-        'compare-sandbox'
+        `compare-sandbox-${simulationTarget}`
       );
       setSandboxSimResult(result);
     } catch (err: any) {
@@ -343,23 +440,51 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
       return { origDiffNodesMap: origNodes, origDiffEdgesMap: origEdges, chgDiffNodesMap: chgNodes, chgDiffEdgesMap: chgEdges };
     }
 
-    // Removed nodes belong to V1
-    archDiff.removedNodes.forEach((entity) => {
-      origNodes.set(entity.id, {
-        changeType: 'removed',
-        entity,
-        versionOrigin: 'V1',
+    if (compareDirection === 'v1_to_v2') {
+      // V1 -> V2: Removed nodes belong to V1 (origNodes), Added nodes belong to V2 (chgNodes)
+      archDiff.removedNodes.forEach((entity) => {
+        origNodes.set(entity.id, {
+          changeType: 'removed',
+          entity,
+          versionOrigin: 'V1',
+        });
       });
-    });
-
-    // Added nodes belong to V2
-    archDiff.addedNodes.forEach((entity) => {
-      chgNodes.set(entity.id, {
-        changeType: 'added',
-        entity,
-        versionOrigin: 'V2',
+      archDiff.addedNodes.forEach((entity) => {
+        chgNodes.set(entity.id, {
+          changeType: 'added',
+          entity,
+          versionOrigin: 'V2',
+        });
       });
-    });
+      archDiff.removedRelationships.forEach((rel) => {
+        origEdges.set(rel.id, rel);
+      });
+      archDiff.addedRelationships.forEach((rel) => {
+        chgEdges.set(rel.id, rel);
+      });
+    } else {
+      // V2 -> V1: archDiff.removedNodes belong to V2 (chgNodes), archDiff.addedNodes belong to V1 (origNodes)
+      archDiff.removedNodes.forEach((entity) => {
+        chgNodes.set(entity.id, {
+          changeType: 'removed',
+          entity,
+          versionOrigin: 'V2',
+        });
+      });
+      archDiff.addedNodes.forEach((entity) => {
+        origNodes.set(entity.id, {
+          changeType: 'added',
+          entity,
+          versionOrigin: 'V1',
+        });
+      });
+      archDiff.removedRelationships.forEach((rel) => {
+        chgEdges.set(rel.id, rel);
+      });
+      archDiff.addedRelationships.forEach((rel) => {
+        origEdges.set(rel.id, rel);
+      });
+    }
 
     // Modified nodes belong to BOTH
     archDiff.modifiedNodes?.forEach((entity) => {
@@ -389,24 +514,18 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
       });
     });
 
-    // Removed relationships belong to V1
-    archDiff.removedRelationships.forEach((rel) => {
+    archDiff.modifiedRelationships?.forEach((rel) => {
       origEdges.set(rel.id, rel);
-    });
-
-    // Added relationships belong to V2
-    archDiff.addedRelationships.forEach((rel) => {
       chgEdges.set(rel.id, rel);
     });
 
-    // Unchanged relationships belong to BOTH
     archDiff.unchangedRelationships?.forEach((rel) => {
       origEdges.set(rel.id, rel);
       chgEdges.set(rel.id, rel);
     });
 
     return { origDiffNodesMap: origNodes, origDiffEdgesMap: origEdges, chgDiffNodesMap: chgNodes, chgDiffEdgesMap: chgEdges };
-  }, [archDiff]);
+  }, [archDiff, compareDirection]);
 
   // Filtered repository files
   const filteredRepoFiles = repoDiff?.diffFiles.filter((f) => {
@@ -530,11 +649,44 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
             <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
               <div className="flex items-center gap-3">
                 <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500 text-white">
-                  Direct Comparison (V1 vs V2)
+                  Direct Comparison ({compareDirection === 'v1_to_v2' ? 'V1 → V2' : 'V2 → V1'})
                 </span>
                 <span className="text-sm font-bold text-white">
-                  {comparisonResult.originalIdentity.filename} → {comparisonResult.changedIdentity.filename}
+                  {compareDirection === 'v1_to_v2'
+                    ? `${comparisonResult.originalIdentity.filename} → ${comparisonResult.changedIdentity.filename}`
+                    : `${comparisonResult.changedIdentity.filename} → ${comparisonResult.originalIdentity.filename}`}
                 </span>
+              </div>
+
+              {/* Compare Direction Interactive Toggle */}
+              <div className="flex items-center gap-1.5 bg-slate-800 p-1 rounded-lg border border-slate-700">
+                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider px-2">
+                  COMPARE DIRECTION
+                </span>
+                <button
+                  type="button"
+                  data-testid="compare-dir-v1-v2"
+                  onClick={() => setCompareDirection('v1_to_v2')}
+                  className={`px-2.5 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                    compareDirection === 'v1_to_v2'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                  }`}
+                >
+                  [ V1 → V2 ]
+                </button>
+                <button
+                  type="button"
+                  data-testid="compare-dir-v2-v1"
+                  onClick={() => setCompareDirection('v2_to_v1')}
+                  className={`px-2.5 py-1 rounded text-xs font-bold transition-all cursor-pointer ${
+                    compareDirection === 'v2_to_v1'
+                      ? 'bg-purple-600 text-white shadow-xs'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                  }`}
+                >
+                  [ V2 → V1 ]
+                </button>
               </div>
 
               {/* Unique input IDs */}
@@ -593,13 +745,13 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
               </div>
 
               <div className="bg-slate-800/80 border border-slate-700/80 rounded-lg p-2 flex items-center justify-between">
-                <span className="text-slate-400">Risk Score:</span>
+                <span className="text-slate-400">Risk Score ({compareDirection === 'v1_to_v2' ? 'V1 → V2' : 'V2 → V1'}):</span>
                 <div className="flex items-center gap-1.5 font-mono font-bold">
-                  <span className="text-slate-300">{v1Score}</span>
+                  <span className="text-slate-300">{compareDirection === 'v1_to_v2' ? v1Score : v2Score}</span>
                   <span className="text-slate-500">→</span>
-                  <span className="text-purple-400">{v2Score}</span>
-                  <span className={riskDelta > 0 ? 'text-red-400 text-[11px]' : riskDelta < 0 ? 'text-emerald-400 text-[11px]' : 'text-slate-400 text-[11px]'}>
-                    ({riskDelta > 0 ? `+${riskDelta}` : riskDelta})
+                  <span className="text-purple-400">{compareDirection === 'v1_to_v2' ? v2Score : v1Score}</span>
+                  <span className={directionalRiskDelta > 0 ? 'text-red-400 text-[11px]' : directionalRiskDelta < 0 ? 'text-emerald-400 text-[11px]' : 'text-slate-400 text-[11px]'}>
+                    ({directionalRiskDelta > 0 ? `+${directionalRiskDelta}` : directionalRiskDelta})
                   </span>
                 </div>
               </div>
@@ -874,7 +1026,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
               }`}
             >
               <Sliders className="w-3.5 h-3.5 text-purple-600" />
-              <span>Try a Change (Simulator on V2)</span>
+              <span>Try a Change (Simulator: {simulationTarget.toUpperCase()})</span>
               {sandboxStagedChanges.length > 0 && (
                 <span className="px-1.5 py-0.2 rounded-full bg-purple-100 text-purple-700 text-[10px] font-mono font-bold">
                   {sandboxStagedChanges.length}
@@ -1252,9 +1404,9 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                     <h3 className="text-base font-bold text-white">{risk.attributionStatement}</h3>
                     <div className="flex items-center gap-2 mt-1">
                       <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${
-                        riskDelta > 0
+                        directionalRiskDelta > 0
                           ? 'bg-red-500/20 text-red-300 border border-red-500/30'
-                          : riskDelta < 0
+                          : directionalRiskDelta < 0
                           ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                           : 'bg-slate-700 text-slate-300'
                       }`}>
@@ -1265,28 +1417,57 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
 
                   <div className="flex items-center gap-4">
                     <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block">Baseline Risk (V1)</span>
-                      <span className="text-lg font-mono font-bold">{v1Score}/100</span>
-                      <span className="text-[10px] text-slate-400 block font-semibold">[{v1Level}]</span>
+                      <span className="text-[10px] text-slate-400 block">Baseline Risk ({compareDirection === 'v1_to_v2' ? 'V1' : 'V2'})</span>
+                      <span className="text-lg font-mono font-bold">{compareDirection === 'v1_to_v2' ? v1Score : v2Score}/100</span>
+                      <span className="text-[10px] text-slate-400 block font-semibold">[{compareDirection === 'v1_to_v2' ? v1Level : v2Level}]</span>
                     </div>
                     <ArrowRight className="w-4 h-4 text-slate-500" />
                     <div className="text-center">
-                      <span className="text-[10px] text-slate-400 block">Target Risk (V2)</span>
-                      <span className="text-lg font-mono font-bold text-purple-400">{v2Score}/100</span>
-                      <span className="text-[10px] text-purple-300 block font-semibold">[{v2Level}]</span>
+                      <span className="text-[10px] text-slate-400 block">Target Risk ({compareDirection === 'v1_to_v2' ? 'V2' : 'V1'})</span>
+                      <span className="text-lg font-mono font-bold text-purple-400">{compareDirection === 'v1_to_v2' ? v2Score : v1Score}/100</span>
+                      <span className="text-[10px] text-purple-300 block font-semibold">[{compareDirection === 'v1_to_v2' ? v2Level : v1Level}]</span>
                     </div>
                     <div className="text-center pl-3 border-l border-slate-800">
-                      <span className="text-[10px] text-slate-400 block">Net Delta ($\Delta$)</span>
+                      <span className="text-[10px] text-slate-400 block">Directional Delta ({compareDirection === 'v1_to_v2' ? 'V1 → V2' : 'V2 → V1'})</span>
                       <span
                         className={`text-lg font-mono font-bold ${
-                          riskDelta > 0 ? 'text-red-400' : riskDelta < 0 ? 'text-emerald-400' : 'text-slate-300'
+                          directionalRiskDelta > 0 ? 'text-red-400' : directionalRiskDelta < 0 ? 'text-emerald-400' : 'text-slate-300'
                         }`}
                       >
-                        {riskDelta > 0 ? `+${riskDelta}` : riskDelta}
+                        {directionalRiskDelta > 0 ? `+${directionalRiskDelta}` : directionalRiskDelta}
                       </span>
                     </div>
                   </div>
                 </div>
+
+                {/* Structural Breakage Alert Banner (Broken Dependency Priority) */}
+                {risk.brokenDependencies && risk.brokenDependencies.length > 0 && (
+                  <div className="p-4 rounded-xl bg-amber-50 border border-amber-300 text-amber-900 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-5 h-5 text-amber-600 shrink-0" />
+                      <div>
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-amber-900">
+                          STRUCTURAL BREAKAGE ({risk.brokenDependencies.length} Broken Required {risk.brokenDependencies.length === 1 ? 'Dependency' : 'Dependencies'})
+                        </h4>
+                        <p className="text-[11px] text-amber-700 mt-0.5">
+                          Critical architecture warning: A lower numerical risk score must never hide structural breakages. The following components were removed while active callers still depend on them:
+                        </p>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5 pt-1">
+                      {risk.brokenDependencies.map((b, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs bg-white/90 border border-amber-200 p-2 rounded-lg">
+                          <span className="font-semibold text-slate-800">
+                            <strong>{b.callerName}</strong> still depends on decommissioned component <strong>{b.removedTargetName}</strong>
+                          </span>
+                          <span className="px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-red-100 text-red-700 border border-red-200 shrink-0 ml-2">
+                            +15.0 pts structural breakage
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Itemized Ledger Table */}
                 <div className="border border-slate-200 rounded-lg overflow-hidden">
@@ -1495,22 +1676,53 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                     <div>
                       <div className="flex items-center gap-2">
                         <h3 className="text-sm font-bold text-white">
-                          In-Memory Sandbox Simulator (Target V2 Baseline)
+                          In-Memory Sandbox Simulator (Target: {simulationTarget.toUpperCase()})
                         </h3>
                         <span className="px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-wider bg-purple-500/30 text-purple-300 border border-purple-400/30">
                           Isolated Sandbox
                         </span>
                       </div>
                       <p className="text-xs text-slate-400 mt-0.5">
-                        Simulate architectural modifications on the Changed Architecture (V2) in an isolated memory space. Baseline models (V1 and V2) and repository files remain 100% untouched.
+                        Simulate architectural modifications on {simulationTarget.toUpperCase()} in an isolated memory space. Neither V1 nor V2 nor active repository files will ever be mutated.
                       </p>
                     </div>
                   </div>
 
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-slate-400 font-mono">
-                      Target: {comparisonResult.changedIdentity.filename} ({comparisonResult.changedModel.entities.length} nodes)
+                  {/* Simulation Target Selector (Requirement 5) */}
+                  <div className="flex items-center gap-3 bg-slate-800 p-1.5 rounded-lg border border-slate-700">
+                    <span className="text-[10px] font-bold text-slate-300 uppercase tracking-wider px-1">
+                      Simulation Target:
                     </span>
+                    <label className="flex items-center gap-1.5 text-xs font-bold text-slate-200 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="simTargetRadio"
+                        data-testid="sim-target-v1"
+                        checked={simulationTarget === 'v1'}
+                        onChange={() => {
+                          setSimulationTarget('v1');
+                          setSandboxStagedChanges([]);
+                          setSandboxSimResult(null);
+                        }}
+                        className="text-purple-600 focus:ring-purple-500 cursor-pointer"
+                      />
+                      <span>V1 ({comparisonResult.originalIdentity.filename})</span>
+                    </label>
+                    <label className="flex items-center gap-1.5 text-xs font-bold text-slate-200 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="simTargetRadio"
+                        data-testid="sim-target-v2"
+                        checked={simulationTarget === 'v2'}
+                        onChange={() => {
+                          setSimulationTarget('v2');
+                          setSandboxStagedChanges([]);
+                          setSandboxSimResult(null);
+                        }}
+                        className="text-purple-600 focus:ring-purple-500 cursor-pointer"
+                      />
+                      <span>V2 ({comparisonResult.changedIdentity.filename})</span>
+                    </label>
                   </div>
                 </div>
 
@@ -1520,7 +1732,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                   <div className="lg:col-span-5 bg-white rounded-xl border border-slate-200 p-4 shadow-2xs space-y-4">
                     <div className="flex items-center justify-between border-b border-slate-100 pb-2">
                       <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                        Stage a Simulated Change
+                        Stage a Simulated Change ({simulationTarget.toUpperCase()})
                       </span>
                       <span className="text-[10px] text-slate-400 font-mono">Step 1</span>
                     </div>
@@ -1583,7 +1795,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       <div className="space-y-3">
                         <div>
                           <label className="block text-xs font-semibold text-slate-700 mb-1">
-                            Component to Remove (from V2)
+                            Component to Remove (from {simulationTarget.toUpperCase()})
                           </label>
                           <select
                             data-testid="sandbox-remove-comp-select"
@@ -1591,7 +1803,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                             onChange={(e) => setSandboxRemoveCompId(e.target.value)}
                             className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white focus:outline-hidden focus:ring-2 focus:ring-purple-500"
                           >
-                            {comparisonResult.changedModel.entities.map((e) => (
+                            {(simBaseModel?.entities || []).map((e) => (
                               <option key={e.id} value={e.id}>
                                 {e.name} ({e.type})
                               </option>
@@ -1599,7 +1811,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                           </select>
                         </div>
                         <p className="text-[11px] text-slate-500 italic">
-                          Simulates decommissioning this component and removing all attached incoming and outgoing edges.
+                          Simulates decommissioning this component and removing all attached incoming and outgoing edges from {simulationTarget.toUpperCase()}.
                         </p>
                       </div>
                     )}
@@ -1654,14 +1866,14 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       <div className="space-y-3">
                         <div>
                           <label className="block text-xs font-semibold text-slate-700 mb-1">
-                            Source Component (Caller)
+                            Source Component (Caller in {simulationTarget.toUpperCase()})
                           </label>
                           <select
                             value={sandboxDepSource}
                             onChange={(e) => setSandboxDepSource(e.target.value)}
                             className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
                           >
-                            {comparisonResult.changedModel.entities.map((e) => (
+                            {(simBaseModel?.entities || []).map((e) => (
                               <option key={e.id} value={e.id}>
                                 {e.name} ({e.type})
                               </option>
@@ -1670,14 +1882,14 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                         </div>
                         <div>
                           <label className="block text-xs font-semibold text-slate-700 mb-1">
-                            Target Component (Callee)
+                            Target Component (Callee in {simulationTarget.toUpperCase()})
                           </label>
                           <select
                             value={sandboxDepTarget}
                             onChange={(e) => setSandboxDepTarget(e.target.value)}
                             className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
                           >
-                            {comparisonResult.changedModel.entities.map((e) => (
+                            {(simBaseModel?.entities || []).map((e) => (
                               <option key={e.id} value={e.id}>
                                 {e.name} ({e.type})
                               </option>
@@ -1706,16 +1918,16 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       <div className="space-y-3">
                         <div>
                           <label className="block text-xs font-semibold text-slate-700 mb-1">
-                            Dependency to Sever (from V2)
+                            Dependency to Sever (from {simulationTarget.toUpperCase()})
                           </label>
                           <select
                             value={sandboxRemoveRelId}
                             onChange={(e) => setSandboxRemoveRelId(e.target.value)}
                             className="w-full text-xs p-2 rounded-lg border border-slate-300 bg-white"
                           >
-                            {comparisonResult.changedModel.relationships.map((r) => {
-                              const s = comparisonResult.changedModel.entities.find((e) => e.id === r.source);
-                              const t = comparisonResult.changedModel.entities.find((e) => e.id === r.target);
+                            {(simBaseModel?.relationships || []).map((r) => {
+                              const s = simBaseModel?.entities.find((e) => e.id === r.source);
+                              const t = simBaseModel?.entities.find((e) => e.id === r.target);
                               return (
                                 <option key={r.id} value={r.id}>
                                   {s?.name || r.source} → {t?.name || r.target} ({r.type})
@@ -1753,7 +1965,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                       <div className="flex items-center justify-between border-b border-slate-100 pb-2 mb-3">
                         <div className="flex items-center gap-2">
                           <span className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                            Staged Sandbox Queue
+                            Staged Sandbox Queue ({simulationTarget.toUpperCase()})
                           </span>
                           <span className="px-2 py-0.5 rounded-full text-[10px] font-mono font-bold bg-purple-100 text-purple-700">
                             {sandboxStagedChanges.length}
@@ -1775,7 +1987,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                           <Sliders className="w-8 h-8 mb-2 opacity-40 text-purple-600" />
                           <p className="text-xs font-medium">No changes staged in sandbox yet.</p>
                           <p className="text-[11px] text-slate-400 mt-0.5">
-                            Select a change type on the left to stage modifications against V2.
+                            Select a change type on the left to stage modifications against {simulationTarget.toUpperCase()}.
                           </p>
                         </div>
                       ) : (
@@ -1821,7 +2033,7 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
                         }`}
                       >
                         <Play className="w-4 h-4 fill-current" />
-                        <span>Run Simulation on V2 Sandbox</span>
+                        <span>Run Simulation on {simulationTarget.toUpperCase()} Sandbox</span>
                       </button>
                     </div>
                   </div>
@@ -1844,32 +2056,35 @@ export const DirectCompareView: React.FC<DirectCompareViewProps> = ({
 
                   return (
                     <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs space-y-6">
-                      {/* Top Simulated Risk Banner */}
+                      {/* Top Simulated Risk Banner (Requirement 7) */}
                       <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-4">
                         <div>
                           <span className="text-[10px] font-black uppercase tracking-wider text-purple-400 block mb-1">
-                            SANDBOX SIMULATION OUTCOME
+                            SIMULATING {simulationTarget.toUpperCase()}
                           </span>
                           <h3 className="text-base font-bold text-white">
-                            Target V2 Risk Score: {sandboxSimResult.current_risk_score}/100 → Simulated Risk: {sandboxSimResult.hypothetical_risk_score}/100
+                            Simulation target: {simulationTarget.toUpperCase()} ({simTargetFilename})
                           </h3>
-                          <p className="text-xs text-slate-400 mt-1">
-                            Direction: <span className="font-semibold text-purple-300">{simShift}</span> (Net $\Delta$: {sandboxSimResult.risk_delta > 0 ? `+${sandboxSimResult.risk_delta}` : sandboxSimResult.risk_delta} pts)
+                          <p className="text-xs text-slate-300 mt-1">
+                            Original risk: <span className="font-mono font-bold text-white">{sandboxSimResult.current_risk_score}/100</span> • Simulated risk: <span className="font-mono font-bold text-purple-300">{sandboxSimResult.hypothetical_risk_score}/100</span> • Risk delta: <span className="font-mono font-bold text-white">{sandboxSimResult.risk_delta > 0 ? `+${sandboxSimResult.risk_delta}` : sandboxSimResult.risk_delta}</span>
+                          </p>
+                          <p className="text-xs text-slate-400 mt-0.5">
+                            Direction: <span className="font-semibold text-purple-300">{simShift}</span> ({simShift === 'Higher structural risk' ? `+${sandboxSimResult.risk_delta} pts penalty` : `${sandboxSimResult.risk_delta} pts`})
                           </p>
                         </div>
 
                         <div className="flex items-center gap-4">
                           <div className="text-center">
-                            <span className="text-[10px] text-slate-400 block">V2 Baseline</span>
+                            <span className="text-[10px] text-slate-400 block">{simulationTarget.toUpperCase()} Original</span>
                             <span className="text-xl font-mono font-bold">{sandboxSimResult.current_risk_score}/100</span>
                           </div>
                           <ArrowRight className="w-4 h-4 text-slate-500" />
                           <div className="text-center">
-                            <span className="text-[10px] text-slate-400 block">Hypothetical</span>
+                            <span className="text-[10px] text-slate-400 block">Simulated</span>
                             <span className="text-xl font-mono font-bold text-purple-400">{sandboxSimResult.hypothetical_risk_score}/100</span>
                           </div>
                           <div className="text-center pl-3 border-l border-slate-800">
-                            <span className="text-[10px] text-slate-400 block">Net Shift</span>
+                            <span className="text-[10px] text-slate-400 block">Risk Delta</span>
                             <span
                               className={`text-xl font-mono font-bold ${
                                 sandboxSimResult.risk_delta > 0

@@ -1,4 +1,5 @@
 import fs from 'fs';
+import path from 'path';
 import JSZip from 'jszip';
 import { analyzeCodebaseZip, extractJavaMethodBlock, extractPythonFunctionBlock } from './codebaseAnalyzer';
 import { reconstructArchitecture } from './architectureReconstructor';
@@ -6,7 +7,8 @@ import { computeArchitectureDiff, createArchitectureSnapshot } from './architect
 import { Objective2AnalysisEngine } from './objective2AnalysisEngine';
 import { ChangeSimulatorEngine } from './changeSimulatorEngine';
 import { computeStructuralRiskDelta } from './structuralRiskEngine';
-import { tryComputeGeneralAnswer, computeAssistantAnswer } from '../components/assistant/TraceIQAssistant';
+import { tryComputeGeneralAnswer, computeAssistantAnswer, routeQueryIntent } from '../components/assistant/TraceIQAssistant';
+import { compareRealModels } from './directCompareEngine';
 import type { ArchitectureModel, ArchitectureEntity, ArchitectureRelationship } from '../types/architecture';
 
 interface TestResult {
@@ -41,9 +43,28 @@ async function runAuditSuite() {
   console.log('TRACEIQ COMPREHENSIVE AUTOMATED AUDIT & VALIDATION SUITE');
   console.log('===============================================================\n');
 
-  const pBaseline = 'c:\\Users\\prana\\Desktop\\wallpapers\\microservices-demo-main.zip';
-  const pChanged = 'c:\\Users\\prana\\Desktop\\wallpapers\\microservices-demo-main - changes.zip';
-  const pCurd = 'c:\\Users\\prana\\Desktop\\wallpapers\\CurdJavaDemo.zip';
+  const resolveFile = (name: string, fallbackPaths: string[]) => {
+    for (const p of fallbackPaths) {
+      if (fs.existsSync(p)) return p;
+    }
+    throw new Error(`Could not locate test file: ${name}`);
+  };
+
+  const pBaseline = resolveFile('microservices-demo-main.zip', [
+    path.resolve('testing files/microservices-demo-main.zip'),
+    'c:\\Users\\prana\\OneDrive\\Desktop\\wallpapers\\microservices-demo-main.zip',
+    'c:\\Users\\prana\\Desktop\\wallpapers\\microservices-demo-main.zip',
+  ]);
+  const pChanged = resolveFile('microservices-demo-main - changes.zip', [
+    path.resolve('testing files/microservices-demo-main - changes.zip'),
+    'c:\\Users\\prana\\OneDrive\\Desktop\\wallpapers\\microservices-demo-main - changes.zip',
+    'c:\\Users\\prana\\Desktop\\wallpapers\\microservices-demo-main - changes.zip',
+  ]);
+  const pCurd = resolveFile('CurdJavaDemo.zip', [
+    path.resolve('testing files/CurdJavaDemo.zip'),
+    'c:\\Users\\prana\\OneDrive\\Desktop\\wallpapers\\CurdJavaDemo.zip',
+    'c:\\Users\\prana\\Desktop\\wallpapers\\CurdJavaDemo.zip',
+  ]);
 
   // =========================================================================
   // PART 1: 16 COMPARISON SCENARIOS
@@ -667,7 +688,7 @@ async function runAuditSuite() {
     );
 
     // 10. Polite Redirect for Off-Topic Questions
-    const offTopicRedirect = "I'm here to help you understand and use TraceIQ. You can ask me about the architecture, dependencies, risks, changes, evidence, or other TraceIQ functions.";
+    const offTopicRedirect = "I'm here to help you understand TraceIQ's architecture, dependencies, evidence, risks, impact analysis, comparisons, and change simulation. Ask me about one of those.";
     const offTopic1 = computeAssistantAnswer('Who won the World Cup?', dummyModel);
     const offTopic2 = computeAssistantAnswer('What is the capital of France?', dummyModel);
     assert(
@@ -1039,6 +1060,424 @@ def other_func():
       'Responsive Viewport Scrollability at 100% Zoom',
       'Content height (~2175px) comfortably exceeds viewports (768p, 864p, 1080p), allowing natural scrolling with 0 zoom reduction',
       `Estimated content height: ${estimatedContentHeight}px vs max screen height: 1080px`
+    );
+  }
+
+  // =========================================================================
+  // PART 9: ARCHITECTURE ACCURACY, WHOLE-BLOCK EVIDENCE & ASSISTANT REGRESSION SUITE
+  // =========================================================================
+  console.log('\n--- PART 9: ARCHITECTURE ACCURACY & ASSISTANT REGRESSION SUITE ---');
+  {
+    const testingFilesDir = path.resolve('testing files');
+    // 1. Missing Entity Detection: Verify Test2 multi-agent components
+    const pTest2 = path.join(testingFilesDir, 'Test2-main.zip');
+    if (fs.existsSync(pTest2)) {
+      const bufTest2 = fs.readFileSync(pTest2);
+      const aTest2 = await analyzeCodebaseZip(bufTest2 as any);
+      const test2EntityIds = new Set(aTest2.entities.map(e => e.id));
+      const expectedAgents = ['flight_agent', 'hotel_agent', 'research_agent', 'weather_agent', 'itinerary_agent', 'multi-agent-orchestrator', 'rag-service'];
+      const allAgentsFound = expectedAgents.every(id => test2EntityIds.has(id));
+      assert(
+        allAgentsFound,
+        'Missing Entity Detection - Multi-Agent System',
+        'Extracts all 5 autonomous agents and orchestrator from Test2 codebase',
+        `Found agents: ${expectedAgents.filter(id => test2EntityIds.has(id)).length}/${expectedAgents.length}`
+      );
+    }
+
+    // 2. Missing Relationship Detection: Verify nodejs_microservice inter-service calls
+    const pNode = path.join(testingFilesDir, 'nodejs_microservice-master.zip');
+    if (fs.existsSync(pNode)) {
+      const bufNode = fs.readFileSync(pNode);
+      const aNode = await analyzeCodebaseZip(bufNode as any);
+      const prodCallsCust = aNode.relationships.some(r => r.source === 'products' && r.target === 'customer' && r.type === 'CALLS');
+      const prodCallsShop = aNode.relationships.some(r => r.source === 'products' && r.target === 'shopping' && r.type === 'CALLS');
+      assert(
+        prodCallsCust && prodCallsShop,
+        'Missing Relationship Detection - Node Microservices',
+        'Detects HTTP app-events inter-service calls between products, customer, and shopping',
+        `products->customer: ${prodCallsCust}, products->shopping: ${prodCallsShop}`
+      );
+    }
+
+    // 3. Duplicate Entity Prevention: No duplicate IDs in analysis.entities
+    const pCurd = path.join(testingFilesDir, 'CurdJavaDemo.zip');
+    if (fs.existsSync(pCurd)) {
+      const bufCurd = fs.readFileSync(pCurd);
+      const aCurd = await analyzeCodebaseZip(bufCurd as any);
+      const entityIds = aCurd.entities.map(e => e.id);
+      const uniqueIds = new Set(entityIds);
+      const noDuplicates = entityIds.length === uniqueIds.size;
+      assert(
+        noDuplicates,
+        'Duplicate Entity Prevention',
+        'Guarantees all registered entity IDs are unique without duplication',
+        `Total: ${entityIds.length}, Unique: ${uniqueIds.size}`
+      );
+    }
+
+    // 4. False Positive Prevention: Test/scratch files do not spawn false services
+    if (fs.existsSync(pTest2)) {
+      const bufTest2 = fs.readFileSync(pTest2);
+      const aTest2 = await analyzeCodebaseZip(bufTest2 as any);
+      const hasScratchService = aTest2.entities.some(e => e.id.includes('scratch') || e.id.includes('test_'));
+      assert(
+        !hasScratchService,
+        'False Positive Prevention',
+        'Ignores scratch_test and unit test scripts to avoid hallucinating false architecture services',
+        `Has test services: ${hasScratchService}`
+      );
+    }
+
+    // 5. Evidence File & Line Range Correctness
+    if (fs.existsSync(pCurd)) {
+      const bufCurd = fs.readFileSync(pCurd);
+      const aCurd = await analyzeCodebaseZip(bufCurd as any);
+      const studentRel = aCurd.relationships.find(r => r.source === 'studentcontroller' && r.target === 'studentservice');
+      const ev = studentRel?.sourceEvidence;
+      const validFile = Boolean(ev?.file?.includes('StudentController.java'));
+      const validLine = Boolean(ev && ev.line && ev.line > 0);
+      const validSnippet = Boolean(ev?.snippet?.includes('studentService'));
+      assert(
+        Boolean(validFile && validLine && validSnippet),
+        'Evidence File & Line Range Correctness',
+        'Relationship has authentic source file, line number, and non-empty snippet',
+        `File: ${ev?.file}, Line: ${ev?.line}, Snippet: ${ev?.snippet?.slice(0, 40)}`
+      );
+    }
+
+    // 6. Complete Code Block Extraction
+    const javaSrc = `package in.curdjava.CurdJavaDemo.controller;
+@RestController
+@RequestMapping("/api/student")
+public class StudentController {
+    @Autowired
+    private StudentService studentService;
+
+    @PostMapping("/create")
+    public ResponseEntity<Student> createStudent(@RequestBody Student student) {
+        Student saved = studentService.createStudent(student);
+        return new ResponseEntity<>(saved, HttpStatus.CREATED);
+    }
+}`;
+    const javaBlock = extractJavaMethodBlock(javaSrc, 7);
+    const hasCompleteJavaMethod = javaBlock !== null && javaBlock.block.includes('@PostMapping("/create")') && javaBlock.block.endsWith('}');
+    assert(
+      hasCompleteJavaMethod,
+      'Complete Code Block Extraction - Java',
+      'Extracts entire Java method from annotation to closing brace',
+      `Lines: ${javaBlock?.lineRange}, Length: ${javaBlock?.block.length} chars`
+    );
+
+    // 7. Configuration Evidence & No-Source-Block Fallback Explanation
+    if (fs.existsSync(pNode)) {
+      const bufNode = fs.readFileSync(pNode);
+      const aNode = await analyzeCodebaseZip(bufNode as any);
+      const manifestRel = aNode.relationships.find(r => r.sourceEvidence?.method === 'Package.json Parser');
+      const hasExplanation = Boolean(manifestRel?.sourceEvidence?.snippet?.includes('No source-code block available.\nThis dependency was derived from'));
+      assert(
+        Boolean(hasExplanation),
+        'No-Source-Block Explanation for Manifest Dependencies',
+        'Includes explicit truth explanation when dependency is derived from package manifest metadata',
+        `Snippet: "${(manifestRel?.sourceEvidence?.snippet ?? '').slice(0, 80)}..."`
+      );
+    }
+
+    // Define test architecture model for assistant QA verification
+    const testModel: ArchitectureModel = reconstructArchitecture({
+      systemName: 'Demo System',
+      version: '1.0.0',
+      inputType: 'blueprint',
+      entities: [
+        { id: 'order-service', name: 'Order Service', type: 'Service', technology: 'Java', source: 'Detected' },
+        { id: 'payment-service', name: 'Payment Service', type: 'Service', technology: 'Node.js', source: 'Detected' },
+        { id: 'db-1', name: 'MySQL DB', type: 'Database', technology: 'MySQL', source: 'Detected' },
+      ],
+      relationships: [
+        { id: 'r1', source: 'order-service', target: 'payment-service', type: 'CALLS' },
+        { id: 'r2', source: 'payment-service', target: 'db-1', type: 'QUERIES' },
+      ],
+    });
+
+    // 8. Assistant Entity Counting: Exact count first, then itemized list
+    const asstCountAns = computeAssistantAnswer('How many entities are there?', testModel);
+    const startsWithCount = asstCountAns.startsWith(`${testModel.entities.length} entities.`);
+    const hasItemizedList = asstCountAns.includes('They are:\n1. ') && asstCountAns.includes('Order Service');
+    assert(
+      startsWithCount && hasItemizedList,
+      'Assistant Entity Counting Precision',
+      'Returns exact numerical count first, followed by itemized list of components',
+      `Answer preview: "${asstCountAns.split('\n')[0]}"`
+    );
+
+    // 9. Assistant Component Risk Calculation
+    const asstRiskAns = computeAssistantAnswer('What is the risk of Order Service?', testModel);
+    const hasRiskScore = asstRiskAns.includes('Risk score: ') && asstRiskAns.includes('/100');
+    const hasMainContributors = asstRiskAns.includes('Main contributors:') && asstRiskAns.includes('direct dependent');
+    assert(
+      hasRiskScore && hasMainContributors,
+      'Assistant Risk Calculation & Contributing Factors',
+      'Provides numerical risk score and itemizes direct dependents and centrality factors',
+      `Answer preview: "${asstRiskAns.split('\n')[0]}"`
+    );
+
+    // 10. Assistant Inbound & Outgoing Dependency Questions
+    const asstDependsOn = computeAssistantAnswer('What depends on Payment Service?', testModel);
+    const asstWhatDoes = computeAssistantAnswer('What does Order Service depend on?', testModel);
+    const dependsOnCallers = asstDependsOn.includes('depend on Payment Service:') && asstDependsOn.includes('Order Service');
+    const whatDoesCallees = asstWhatDoes.includes('Order Service depends on') && asstWhatDoes.includes('Payment Service');
+    assert(
+      dependsOnCallers && whatDoesCallees,
+      'Assistant Inbound & Outgoing Dependency Lookups',
+      'Accurately distinguishes callers from callees for targeted components',
+      `Depends on callers: ${dependsOnCallers}, Outgoing callees: ${whatDoesCallees}`
+    );
+
+    // 11. Assistant Provenance Citations
+    const dummyRel: ArchitectureRelationship = {
+      id: 'rel-ord-pay',
+      source: 'order-service',
+      target: 'payment-service',
+      type: 'CALLS',
+      sourceEvidence: {
+        file: 'services/order/src/client.ts',
+        line: 42,
+        lineRange: '40–45',
+        method: 'AST Dependency Scanner',
+        confidence: 'HIGH',
+        snippet: 'const res = await axios.post("/pay", orderData);',
+      }
+    };
+    const asstProv = computeAssistantAnswer('How is this dependency detected?', testModel, 'analyze', null, dummyRel);
+    const hasProvFile = asstProv.includes('File: services/order/src/client.ts');
+    const hasProvLines = asstProv.includes('Lines: 40–45');
+    const hasProvMethod = asstProv.includes('Method: AST Dependency Scanner');
+    assert(
+      hasProvFile && hasProvLines && hasProvMethod,
+      'Assistant Dependency Provenance Citations',
+      'Returns physical file, line range, detection method, and snippet without retention statistics',
+      `Has file: ${hasProvFile}, Has lines: ${hasProvLines}, Has method: ${hasProvMethod}`
+    );
+
+    // 12. Unrelated-Question Handling: Exact redirect message
+    const asstWeather = computeAssistantAnswer("What is today's weather?", testModel);
+    const exactRedirect = "I'm here to help you understand TraceIQ's architecture, dependencies, evidence, risks, impact analysis, comparisons, and change simulation. Ask me about one of those.";
+    assert(
+      asstWeather === exactRedirect,
+      'Assistant Unrelated Question Redirect',
+      'Returns exact polite domain redirect message for out-of-scope non-software queries',
+      `Answer: "${asstWeather}"`
+    );
+  }
+
+  // =========================================================================
+  // PART 10: BIDIRECTIONAL ARCHITECTURE SIMULATION & 19-INTENT ASSISTANT SUITE
+  // =========================================================================
+  console.log('\n--- PART 10: BIDIRECTIONAL ARCHITECTURE SIMULATION & 19-INTENT ASSISTANT SUITE ---');
+  {
+    // Construct test models V1 and V2 with known difference
+    const modelV1 = reconstructArchitecture({
+      systemName: 'System-V1',
+      version: '1.0.0',
+      inputType: 'codebase',
+      entities: [
+        { id: 'web-gateway', name: 'Web Gateway', type: 'Service', technology: 'TypeScript', source: 'Detected' },
+        { id: 'order-service', name: 'Order Service', type: 'Service', technology: 'Node.js', source: 'Detected' },
+        { id: 'payment-service', name: 'Payment Service', type: 'Service', technology: 'Java', source: 'Detected' },
+        { id: 'orders-db', name: 'Orders DB', type: 'Database', technology: 'PostgreSQL', source: 'Detected' },
+      ],
+      relationships: [
+        { id: 'r1', source: 'web-gateway', target: 'order-service', type: 'CALLS' },
+        { id: 'r2', source: 'order-service', target: 'payment-service', type: 'CALLS' },
+        { id: 'r3', source: 'order-service', target: 'orders-db', type: 'QUERIES' },
+      ],
+      inventory: {
+        total_files: 10,
+        total_folders: 3,
+        files: [
+          { name: 'pom.xml', path: 'services/payment/pom.xml', extension: 'xml', size_bytes: 1024, category: 'config' },
+          { name: 'order.ts', path: 'services/order/src/order.ts', extension: 'ts', size_bytes: 2048, category: 'source' },
+        ],
+        folders: ['services', 'services/order', 'services/payment'],
+      } as any,
+    });
+
+    // Model V2: Payment Service is removed, but Order Service survives and still calls it!
+    const modelV2 = reconstructArchitecture({
+      systemName: 'System-V2',
+      version: '2.0.0',
+      inputType: 'codebase',
+      entities: [
+        { id: 'web-gateway', name: 'Web Gateway', type: 'Service', technology: 'TypeScript', source: 'Detected' },
+        { id: 'order-service', name: 'Order Service', type: 'Service', technology: 'Node.js', source: 'Detected' },
+        { id: 'orders-db', name: 'Orders DB', type: 'Database', technology: 'PostgreSQL', source: 'Detected' },
+        { id: 'analytics-worker', name: 'Analytics Worker', type: 'Service', technology: 'Python', source: 'Detected' },
+      ],
+      relationships: [
+        { id: 'r1', source: 'web-gateway', target: 'order-service', type: 'CALLS' },
+        { id: 'r3', source: 'order-service', target: 'orders-db', type: 'QUERIES' },
+        { id: 'r4', source: 'order-service', target: 'analytics-worker', type: 'CALLS' },
+      ],
+      inventory: {
+        total_files: 11,
+        total_folders: 4,
+        files: [
+          { name: 'order.ts', path: 'services/order/src/order.ts', extension: 'ts', size_bytes: 2048, category: 'source' },
+          { name: 'worker.py', path: 'services/analytics/worker.py', extension: 'py', size_bytes: 1500, category: 'source' },
+        ],
+        folders: ['services', 'services/order', 'services/analytics'],
+      } as any,
+    });
+
+    const compV1toV2 = compareRealModels(modelV1, modelV2);
+    const compV2toV1 = compareRealModels(modelV2, modelV1);
+
+    // 1. Bidirectional Comparison Inversion
+    const deltaV1toV2 = compV1toV2.structuralRisk.delta;
+    const deltaV2toV1 = compV2toV1.structuralRisk.delta;
+    const exactInverse = Math.abs(deltaV1toV2 + deltaV2toV1) < 0.001;
+    const addedInvertsRemoved =
+      compV1toV2.architectureDiff.removedNodes.length === compV2toV1.architectureDiff.addedNodes.length &&
+      compV1toV2.architectureDiff.addedNodes.length === compV2toV1.architectureDiff.removedNodes.length;
+    assert(
+      exactInverse && addedInvertsRemoved,
+      'Bidirectional Comparison Inversion',
+      'Inverts added/removed components and mathematically inverses risk delta without data duplication',
+      `Δ(V1→V2)=${deltaV1toV2.toFixed(1)}, Δ(V2→V1)=${deltaV2toV1.toFixed(1)}, Inverted added/removed: ${addedInvertsRemoved}`
+    );
+
+    // 2. Broken Dependency Priority Reporting
+    const brokenList = compV1toV2.structuralRisk.brokenDependencies || [];
+    const hasBrokenDep = brokenList.some(
+      (b) => b.callerName === 'Order Service' && b.removedTargetName === 'Payment Service'
+    );
+    const asstBrokenAns = computeAssistantAnswer('Are there any broken dependencies?', modelV1, 'compare', null, null, compV1toV2, 'v1_to_v2');
+    const mentionsBrokenWithPenalty = asstBrokenAns.includes('Payment Service was removed') && asstBrokenAns.includes('+15.0 risk penalty');
+    assert(
+      hasBrokenDep && mentionsBrokenWithPenalty,
+      'Broken Dependency Priority Reporting',
+      'Flags removed target with surviving callers and includes explicit +15.0 risk penalty statement',
+      `Broken found: ${hasBrokenDep}, Assistant contains exact penalty statement: ${mentionsBrokenWithPenalty}`
+    );
+
+    // 3. Change Simulator on V1 vs V2 Target Selection
+    const v1SimAns = computeAssistantAnswer(
+      'What happens if I remove Web Gateway on V1?',
+      modelV1,
+      'compare',
+      null,
+      null,
+      compV1toV2,
+      'v1_to_v2',
+      'v1'
+    );
+    const v2SimAns = computeAssistantAnswer(
+      'What happens if I remove Analytics Worker on V2?',
+      modelV1,
+      'compare',
+      null,
+      null,
+      compV1toV2,
+      'v1_to_v2',
+      'v2'
+    );
+    const hasV1Banner = v1SimAns.includes('SIMULATING ON V1: Web Gateway');
+    const hasV2Banner = v2SimAns.includes('SIMULATING ON V2: Analytics Worker');
+    assert(
+      hasV1Banner && hasV2Banner,
+      'Change Simulator on V1 vs V2 Independence',
+      'Simulates independently on selected target with distinctive SIMULATING ON V1 / V2 banners',
+      `V1 Banner: ${hasV1Banner}, V2 Banner: ${hasV2Banner}`
+    );
+
+    // 4. Simulation Target Disambiguation
+    const disambigSim = computeAssistantAnswer(
+      'What happens if I remove Order Service?',
+      modelV1,
+      'compare',
+      null,
+      null,
+      compV1toV2,
+      'v1_to_v2',
+      null
+    );
+    const expectedSimDisambig = 'Do you want to simulate the change on V1 or V2?';
+    assert(
+      disambigSim === expectedSimDisambig,
+      'Simulation Target Disambiguation',
+      'Prompts user to disambiguate target version when simulation query is ambiguous in compare view',
+      `Answer: "${disambigSim}"`
+    );
+
+    // 5. File Summary Disambiguation
+    const disambigFile = computeAssistantAnswer(
+      'Explain file pom.xml',
+      modelV1,
+      'compare',
+      null,
+      null,
+      compV1toV2,
+      'v1_to_v2',
+      null
+    );
+    const expectedFileDisambig = 'Do you mean the V1 file or the V2 file?';
+    assert(
+      disambigFile === expectedFileDisambig,
+      'File Summary Disambiguation',
+      'Prompts user to disambiguate version when file query is ambiguous in compare view',
+      `Answer: "${disambigFile}"`
+    );
+
+    // 6. Explicit 19-Intent Routing Matrix Verification
+    const testCases: Array<{ q: string; expected: string }> = [
+      { q: 'How many components are there?', expected: 'entity_count' },
+      { q: 'What are the components?', expected: 'entity_list' },
+      { q: 'How many files in repository?', expected: 'repository_file_count' },
+      { q: 'List files in repository', expected: 'repository_file_list' },
+      { q: 'Summarize the architecture', expected: 'architecture_summary' },
+      { q: 'What is the risk score?', expected: 'risk_score' },
+      { q: 'Why is the risk high?', expected: 'risk_explanation' },
+      { q: 'What is the risk delta?', expected: 'risk_delta' },
+      { q: 'What depends on Payment Service?', expected: 'dependency_query' },
+      { q: 'What are broken dependencies?', expected: 'broken_dependencies' },
+      { q: 'What components changed?', expected: 'changed_components' },
+      { q: 'What components were added?', expected: 'added_components' },
+      { q: 'What components were removed?', expected: 'removed_components' },
+      { q: 'What components were modified?', expected: 'modified_components' },
+      { q: 'What is the blast radius of Order Service?', expected: 'impact_analysis' },
+      { q: 'Show evidence for dependency', expected: 'evidence_lookup' },
+      { q: 'What is currently simulated?', expected: 'simulation_status' },
+      { q: 'Summarize the comparison', expected: 'comparison_summary' },
+      { q: 'Explain file pom.xml', expected: 'file_summary' },
+    ];
+
+    let allIntentsMatched = true;
+    const mismatchedIntents: string[] = [];
+    testCases.forEach((tc) => {
+      const routed = routeQueryIntent(tc.q, { currentRoute: 'compare', hasComparison: true });
+      if (routed !== tc.expected) {
+        allIntentsMatched = false;
+        mismatchedIntents.push(`"${tc.q}" -> got "${routed}", expected "${tc.expected}"`);
+      }
+    });
+
+    assert(
+      allIntentsMatched,
+      '19-Intent Router Completeness',
+      'Deterministically maps all 19 query categories to their exact domain intents',
+      allIntentsMatched ? 'All 19 intents matched 100%' : `Mismatches: ${mismatchedIntents.join('; ')}`
+    );
+
+    // 7. Directional Inversion of Added & Removed Assistant Answers
+    const addedV1toV2 = computeAssistantAnswer('What components were added?', modelV1, 'compare', null, null, compV1toV2, 'v1_to_v2');
+    const addedV2toV1 = computeAssistantAnswer('What components were added?', modelV1, 'compare', null, null, compV1toV2, 'v2_to_v1');
+    const v1toV2HasAnalytics = addedV1toV2.includes('Analytics Worker');
+    const v2toV1HasPayment = addedV2toV1.includes('Payment Service');
+    assert(
+      v1toV2HasAnalytics && v2toV1HasPayment,
+      'Directional Inversion in Assistant Output',
+      'Inverts added and removed components based on active compareDirection (V1→V2 vs V2→V1)',
+      `V1->V2 added has Analytics: ${v1toV2HasAnalytics}, V2->V1 added has Payment: ${v2toV1HasPayment}`
     );
   }
 

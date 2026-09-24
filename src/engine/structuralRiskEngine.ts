@@ -338,7 +338,9 @@ export function computeStructuralRiskDelta(
     delta > 0 ? 'Higher structural risk' : delta < 0 ? 'Lower structural risk' : 'No structural risk change';
 
   let attributionStatement: string;
-  if (delta > 0) {
+  if (brokenDeps.length > 0 && delta < 0) {
+    attributionStatement = `Lower aggregate structural score (${delta} pts: ${origScore} [${origRiskLevel}] → ${chgScore} [${chgRiskLevel}]), but with ${brokenDeps.length} broken required ${brokenDeps.length === 1 ? 'dependency' : 'dependencies'} that require immediate resolution.`;
+  } else if (delta > 0) {
     const factors = ledger.filter((f) => f.points > 0).map((f) => f.factor.toLowerCase()).join(', ');
     attributionStatement = `Higher structural risk: Net shift of +${delta} points (${origScore} [${origRiskLevel}] → ${chgScore} [${chgRiskLevel}])${factors ? ` due to ${factors}` : ''}.`;
   } else if (delta < 0) {
@@ -356,6 +358,7 @@ export function computeStructuralRiskDelta(
     shiftDirection,
     ledger,
     attributionStatement,
+    brokenDependencies: brokenDeps,
   };
 }
 

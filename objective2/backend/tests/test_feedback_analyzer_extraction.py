@@ -4,7 +4,11 @@ from pathlib import Path
 from app.services.codebase_service import CodebaseService
 from app.services.pipeline_service import AnalysisPipeline
 
-FEEDBACK_ZIP = r"C:\Users\prana\Downloads\AI-Customer-Feedback-Analyzer-main.zip"
+FEEDBACK_ZIP_PATHS = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'testing files', 'AI-Customer-Feedback-Analyzer-main.zip')),
+    r"C:\Users\prana\Downloads\AI-Customer-Feedback-Analyzer-main.zip",
+]
+FEEDBACK_ZIP = next((p for p in FEEDBACK_ZIP_PATHS if os.path.exists(p)), FEEDBACK_ZIP_PATHS[0])
 
 @pytest.mark.skipif(not os.path.exists(FEEDBACK_ZIP), reason="Real feedback analyzer ZIP not in Downloads")
 def test_feedback_analyzer_real_extraction():

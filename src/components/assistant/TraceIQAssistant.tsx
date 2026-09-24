@@ -8,8 +8,12 @@ import type {
   ArchitectureEntity,
   ArchitectureModel,
   ArchitectureRelationship,
+  ArchitectureComparisonResult,
 } from '../../types/architecture';
 import type { NavRoute } from '../layout/Sidebar';
+import { Objective2AnalysisEngine } from '../../engine/objective2AnalysisEngine';
+import { ChangeSimulatorEngine } from '../../engine/changeSimulatorEngine';
+import { compareRealModels } from '../../engine/directCompareEngine';
 
 interface AssistantMessage {
   id: string;
@@ -19,7 +23,7 @@ interface AssistantMessage {
   chips?: string[];
 }
 
-interface TraceIQAssistantProps {
+export interface TraceIQAssistantProps {
   isOpen: boolean;
   onClose: () => void;
   onOpen?: () => void;
@@ -28,6 +32,217 @@ interface TraceIQAssistantProps {
   selectedEntity: ArchitectureEntity | null;
   selectedRelationship: ArchitectureRelationship | null;
   onNavigate: (route: NavRoute) => void;
+  comparisonResult?: ArchitectureComparisonResult | null;
+  compareDirection?: 'v1_to_v2' | 'v2_to_v1';
+  simulationTarget?: 'v1' | 'v2' | null;
+  selectedFile?: { path: string; content?: string } | null;
+}
+
+export type AssistantIntent =
+  | 'simulation_action'
+  | 'entity_count'
+  | 'entity_list'
+  | 'repository_file_count'
+  | 'repository_file_list'
+  | 'architecture_summary'
+  | 'risk_score'
+  | 'risk_explanation'
+  | 'risk_delta'
+  | 'dependency_query'
+  | 'broken_dependencies'
+  | 'changed_components'
+  | 'added_components'
+  | 'removed_components'
+  | 'modified_components'
+  | 'impact_analysis'
+  | 'evidence_lookup'
+  | 'simulation_status'
+  | 'comparison_summary'
+  | 'file_summary'
+  | 'general_knowledge'
+  | 'unsupported';
+
+export function routeQueryIntent(
+  question: string,
+  context?: {
+    currentRoute?: string;
+    hasComparison?: boolean;
+    selectedEntity?: ArchitectureEntity | null;
+  }
+): AssistantIntent {
+  const clean = question.trim();
+  const lower = clean.toLowerCase();
+
+  // 1. Simulation Action: "What happens if I remove/delete X?", "Simulate removing X"
+  if (
+    /(?:what\s+happens\s+if\s+i\s+(?:remove|delete)|simulate\s+(?:removing|deleting)|if\s+i\s+(?:remove|delete))\s+/i.test(question) ||
+    (context?.currentRoute === 'simulator' && (lower.includes('remove') || lower.includes('delete')))
+  ) {
+    return 'simulation_action';
+  }
+
+  // 2. Simulation Status: "What is currently simulated?", "Simulation status", "Current simulation target"
+  if (
+    /(?:what\s+is\s+currently\s+simulated|simulation\s+status|current\s+simulation|active\s+simulation|simulator\s+status|simulat(?:or|ion)\s+target)\b/i.test(lower)
+  ) {
+    return 'simulation_status';
+  }
+
+  // 3. Broken Dependencies: "Are there any broken dependencies?", "What are broken dependencies?", "Dangling callers"
+  if (
+    /(?:broken\s+dependenc|broken\s+required|dangling\s+caller|unresolved\s+dependenc)/i.test(lower)
+  ) {
+    return 'broken_dependencies';
+  }
+
+  // 4. Risk Delta: "What is the risk delta?", "How did risk change?", "Risk change", "Risk shift"
+  if (
+    /(?:risk\s+delta|how\s+did\s+risk\s+change|risk\s+change|risk\s+shift|delta\s+in\s+risk|difference\s+in\s+risk)/i.test(lower)
+  ) {
+    return 'risk_delta';
+  }
+
+  // 5. Risk Explanation: "Why is the risk high?", "Why is risk score X?", "Explain risk factors", "Risk breakdown"
+  if (
+    /(?:why\s+is\s+(?:the\s+)?risk|explain\s+(?:the\s+)?risk|risk\s+factors|risk\s+breakdown|why\s+is\s+risk\s+score|what\s+contributes\s+to\s+risk)/i.test(lower)
+  ) {
+    return 'risk_explanation';
+  }
+
+  // 6. Risk Score: "What is the risk score?", "Risk score", "What is the risk of [Component]"
+  if (
+    /(?:what\s+is\s+(?:the\s+)?risk\s+score|system\s+risk|risk\s+score|(?:what\s+is\s+(?:the\s+)?risk\s+(?:of|for)|risk\s+(?:of|for))\s+([a-zA-Z0-9_\-\s]+?))\b/i.test(lower) ||
+    lower === 'risk' || lower === 'what is the risk?' || lower === 'what is the risk'
+  ) {
+    return 'risk_score';
+  }
+
+  // 7. Added Components: "What components were added?", "Added components"
+  if (
+    /(?:what\s+components\s+(?:were\s+)?added|added\s+components|which\s+components\s+(?:were\s+)?added|new\s+components)\b/i.test(lower)
+  ) {
+    return 'added_components';
+  }
+
+  // 8. Removed Components: "What components were removed?", "Removed components", "Deleted components"
+  if (
+    /(?:what\s+components\s+(?:were\s+)?removed|removed\s+components|which\s+components\s+(?:were\s+)?removed|deleted\s+components|decommissioned\s+components)\b/i.test(lower)
+  ) {
+    return 'removed_components';
+  }
+
+  // 9. Modified Components: "What components were modified?", "Modified components", "Updated components"
+  if (
+    /(?:what\s+components\s+(?:were\s+)?modified|modified\s+components|which\s+components\s+(?:were\s+)?modified|updated\s+components)\b/i.test(lower)
+  ) {
+    return 'modified_components';
+  }
+
+  // 10. Changed Components: "What components changed?", "Changed components"
+  if (
+    /(?:what\s+components\s+changed|changed\s+components|which\s+components\s+changed|component\s+differences|component\s+diff)\b/i.test(lower)
+  ) {
+    return 'changed_components';
+  }
+
+  // 11. Comparison Summary: "Summarize comparison", "Comparison summary", "What changed between V1 and V2?"
+  if (
+    /(?:summarize\s+(?:the\s+)?comparison|comparison\s+summary|compare\s+summary|what\s+changed\s+between\s+v1\s+and\s+v2|differences?\s+between\s+v1\s+and\s+v2|compare\s+versions|explain\s+comparison)\b/i.test(lower)
+  ) {
+    return 'comparison_summary';
+  }
+
+  // 12. Repository File Count: "How many files in repository?", "Total files"
+  if (
+    /(?:how\s+many\s+files|file\s+count|number\s+of\s+files|total\s+files)\b/i.test(lower)
+  ) {
+    return 'repository_file_count';
+  }
+
+  // 13. Repository File List: "List files in repository", "Show file tree", "What files exist?"
+  if (
+    /(?:list\s+(?:repository\s+)?files|show\s+(?:repository\s+)?files|what\s+files\b|repository\s+file\s+list|show\s+file\s+tree|file\s+tree|files\s+in\s+repo)\b/i.test(lower)
+  ) {
+    return 'repository_file_list';
+  }
+
+  // 14. File Summary: "Explain file pom.xml", "What does file X do?"
+  if (
+    /(?:explain\s+file|what\s+does\s+file\s+|summarize\s+file|file\s+summary|details\s+of\s+file)\b/i.test(lower) ||
+    /\b(?:explain|summarize|details\s+of)\s+([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i.test(lower)
+  ) {
+    return 'file_summary';
+  }
+
+  // 15. Entity Count: "How many entities/components/services/databases/apis?"
+  if (
+    /(?:how\s+many\s+(?:entities|components|services|databases|apis|nodes)|(?:entity|component|service|database|api)\s+count)\b/i.test(lower) ||
+    lower === 'how many entities?' || lower === 'how many entities' ||
+    lower === 'how many components?' || lower === 'how many components' ||
+    lower === 'how many services?' || lower === 'how many services' ||
+    lower === 'how many databases?' || lower === 'how many databases' ||
+    lower === 'how many apis?' || lower === 'how many apis'
+  ) {
+    return 'entity_count';
+  }
+
+  // 16. Entity List: "What are the components?", "List entities", "Show services", "What databases are there?"
+  if (
+    /(?:what\s+(?:are\s+the\s+)?(?:components|entities|services|databases|apis)|list\s+(?:components|entities|services|databases|apis)|show\s+(?:components|entities|services|databases|apis)|which\s+(?:components|services|databases|apis)|what\s+services\s+are\s+there|what\s+databases\s+are\s+there)\b/i.test(lower)
+  ) {
+    return 'entity_list';
+  }
+
+  // 17. Dependency Query: "What does X depend on?", "What depends on X?", "Who calls X?"
+  if (
+    /(?:what\s+depends\s+on|what\s+does\s+[a-zA-Z0-9_\-\s]+\s+depend\s+on|who\s+calls\s+|what\s+calls\s+|dependencies\s+of\s+|callers\s+of\s+|who\s+uses\s+)\b/i.test(lower)
+  ) {
+    return 'dependency_query';
+  }
+
+  // 18. Impact Analysis: "What is the impact?", "Blast radius", "Ripple chain"
+  if (
+    /(?:blast\s*radius|ripple|impact\s+analysis|impact\s+propagation|cascade\s+severity|what\s+is\s+the\s+impact)\b/i.test(lower)
+  ) {
+    return 'impact_analysis';
+  }
+
+  // 19. Evidence Lookup: "Show evidence", "Provenance", "How is this dependency detected?", "What code proves X"
+  if (
+    /(?:evidence|provenance|source\s+citation|how\s+is\s+(?:this\s+)?dependency\s+detected|what\s+code\s+proves|where\s+is\s+.*defined)\b/i.test(lower)
+  ) {
+    return 'evidence_lookup';
+  }
+
+  // 20. Architecture Summary: "Summarize architecture", "System overview", "Architecture flow"
+  if (
+    /(?:summarize\s+(?:the\s+)?architecture|architecture\s+summary|architecture\s+overview|system\s+overview|what\s+is\s+this\s+architecture|architecture\s+flow|how\s+does\s+(?:the\s+)?architecture\s+work|explain\s+architecture|overview)\b/i.test(lower)
+  ) {
+    return 'architecture_summary';
+  }
+
+  // 21. General Math & Tech Knowledge
+  if (tryComputeGeneralAnswer(question) !== null) {
+    return 'general_knowledge';
+  }
+
+  // 22. Architecture Domain patterns check
+  const domainPatterns = [
+    /\btraceiq\b/i, /\barchitect\b/i, /\bcomponent\b/i, /\bservice\b/i, /\bapis?\b/i, /\bendpoint\b/i,
+    /\bdatabase\b/i, /\bdb\b/i, /\bstor(e|age)\b/i, /\brisk\b/i, /\bdepend\b/i, /\bcaller\b/i,
+    /\bblast\s*radius\b/i, /\bripple\b/i, /\bspof\b/i, /\bsingle\s+point\b/i, /\bcycl(e|ic)\b/i,
+    /\bloop\b/i, /\bcircular\b/i, /\bledger\b/i, /\bcausal\b/i, /\binventory\b/i, /\bfiles?\b/i,
+    /\bfolders?\b/i, /\bretention\b/i, /\bevidence\b/i, /\bprovenance\b/i, /\bcitation\b/i,
+    /\bcompare\b/i, /\bdiff\b/i, /\bsimulat\b/i, /\bchange\b/i, /\bmodels?\b/i, /\bsystems?\b/i,
+    /\bnodes?\b/i, /\bedges?\b/i, /\bversions?\b/i, /\bspring\b/i, /\bflask\b/i,
+    /\bdocker\b/i, /\bkafka\b/i, /\bgrpc\b/i, /\bmysql\b/i, /\bpostgres\b/i,
+    /\bredis\b/i, /\bpropagation\b/i, /\bimpact\b/i, /\bpackages?\b/i, /\bmanifest\b/i,
+  ];
+  if (domainPatterns.some((pattern) => pattern.test(lower))) {
+    return 'architecture_summary';
+  }
+
+  return 'unsupported';
 }
 
 export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
@@ -39,6 +254,10 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
   selectedEntity,
   selectedRelationship,
   onNavigate,
+  comparisonResult = null,
+  compareDirection = 'v1_to_v2',
+  simulationTarget = null,
+  selectedFile = null,
 }) => {
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [inputText, setInputText] = useState('');
@@ -51,11 +270,13 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
       initialPrompt += `\n\nCurrently focused on component: **${selectedEntity.name}** (${selectedEntity.type}, ${selectedEntity.technology}).`;
     } else if (selectedRelationship) {
       initialPrompt += `\n\nCurrently focused on relationship: **${selectedRelationship.source} → ${selectedRelationship.target}** (${selectedRelationship.type}).`;
+    } else if (comparisonResult) {
+      initialPrompt += `\n\nActive Comparison: **${comparisonResult.originalModel.systemName} (V1)** vs **${comparisonResult.changedModel.systemName} (V2)** [Direction: ${compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2'}].`;
     }
 
-    let defaultChips = ['Summarize Architecture', 'Identify High-Risk Components', 'Explain Repository Retention'];
+    let defaultChips = ['Summarize Architecture', 'Identify High-Risk Components', 'What are Broken Dependencies?'];
     if (currentRoute === 'compare') {
-      defaultChips = ['Explain Comparison Differences', 'Review Added & Removed Files', 'What are Broken Dependencies?'];
+      defaultChips = ['Summarize Comparison', 'What are Broken Dependencies?', 'What is the Risk Delta?', 'What Components Changed?'];
     } else if (currentRoute === 'simulator') {
       defaultChips = ['How does Change Simulation work?', 'What is Broken Dependency Risk?', 'Explain Causal Risk Ledger'];
     } else if (currentRoute === 'risk') {
@@ -77,7 +298,7 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
         chips: defaultChips,
       },
     ]);
-  }, [currentRoute, selectedEntity?.id, selectedRelationship?.id]);
+  }, [currentRoute, selectedEntity?.id, selectedRelationship?.id, comparisonResult, compareDirection]);
 
   useEffect(() => {
     if (isOpen) {
@@ -94,14 +315,29 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
     };
 
-    const answer = computeAssistantAnswer(question, model, currentRoute, selectedEntity);
+    const answer = computeAssistantAnswer(
+      question,
+      model,
+      currentRoute,
+      selectedEntity,
+      selectedRelationship,
+      comparisonResult,
+      compareDirection,
+      simulationTarget,
+      selectedFile
+    );
+
+    let nextChips = ['Summarize Architecture', 'Identify High-Risk Components', 'What are Broken Dependencies?'];
+    if (currentRoute === 'compare' || comparisonResult) {
+      nextChips = ['Summarize Comparison', 'What is the Risk Delta?', 'What are Broken Dependencies?', 'What Components Changed?'];
+    }
 
     const assistantMsg: AssistantMessage = {
       id: `asst-${Date.now()}`,
       sender: 'assistant',
       text: answer,
       timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
-      chips: ['Summarize Architecture', 'Identify High-Risk Components', 'What are Broken Dependencies?'],
+      chips: nextChips,
     };
 
     setMessages((prev) => [...prev, userMsg, assistantMsg]);
@@ -158,10 +394,17 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
 
       {/* Context Badge */}
       <div className="px-3.5 py-1.5 bg-slate-50 border-b border-slate-100 flex items-center justify-between text-[11px] text-slate-500">
-        <span className="font-semibold text-slate-700">Context: {currentRoute.toUpperCase()}</span>
+        <span className="font-semibold text-slate-700">
+          Context: {currentRoute.toUpperCase()}
+          {comparisonResult && ` • ${compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2'}`}
+        </span>
         {selectedEntity ? (
           <span className="text-violet-600 font-medium truncate max-w-[180px]">
             Node: {selectedEntity.name}
+          </span>
+        ) : simulationTarget ? (
+          <span className="text-emerald-700 font-medium">
+            Sim Target: {simulationTarget.toUpperCase()}
           </span>
         ) : (
           <span>{model.entities.length} components loaded</span>
@@ -193,7 +436,7 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
                   <button
                     key={idx}
                     onClick={() => {
-                      if (chip.includes('Repository')) {
+                      if (chip.includes('Repository Inventory')) {
                         onNavigate('inventory');
                       } else {
                         handleGenerateAnswer(chip);
@@ -218,7 +461,7 @@ export const TraceIQAssistant: React.FC<TraceIQAssistantProps> = ({
           value={inputText}
           onChange={(e) => setInputText(e.target.value)}
           onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-          placeholder="Ask about components, callers, risks..."
+          placeholder="Ask about components, callers, risks, simulations..."
           className="flex-1 px-3 py-2 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-800 placeholder:text-slate-400 outline-hidden focus:border-violet-500 focus:bg-white transition-all"
         />
         <button
@@ -393,7 +636,6 @@ export const tryComputeGeneralAnswer = (q: string): string | null => {
   }
 
   // 4. Basic Arithmetic: "what is 15 + 25?", "calculate 12 * 8", "12 × 8", "100 / 4", "50 - 18"
-  // Normalize multiplication and division symbols
   const normalizedForMath = lower
     .replace(/×/g, '*')
     .replace(/÷/g, '/');
@@ -445,159 +687,552 @@ export const computeAssistantAnswer = (
   question: string,
   model: ArchitectureModel,
   currentRoute: string = 'analyze',
-  selectedEntity: ArchitectureEntity | null = null
+  selectedEntity: ArchitectureEntity | null = null,
+  selectedRelationship: ArchitectureRelationship | null = null,
+  comparisonResult?: ArchitectureComparisonResult | null,
+  compareDirection: 'v1_to_v2' | 'v2_to_v1' = 'v1_to_v2',
+  simulationTarget: 'v1' | 'v2' | null = null,
+  selectedFile?: { path: string; content?: string } | null
 ): string => {
-  const general = tryComputeGeneralAnswer(question);
-  if (general) return general;
+  const lower = question.trim().toLowerCase();
 
-  const lower = question.toLowerCase();
+  // Route query intent across deterministic routing matrix
+  const intent = routeQueryIntent(question, {
+    currentRoute,
+    hasComparison: !!comparisonResult,
+    selectedEntity,
+  });
 
-  if (lower.includes('broken dependenc') || lower.includes('unresolved') || lower.includes('broken required')) {
-    return `**Broken Required Dependency Risk**:
+  // Handle general knowledge or arithmetic first
+  if (intent === 'general_knowledge') {
+    const general = tryComputeGeneralAnswer(question);
+    if (general) return general;
+  }
+
+  // Derive active comparison taking compareDirection into account
+  const activeComparison: ArchitectureComparisonResult | null = comparisonResult
+    ? (compareDirection === 'v2_to_v1'
+        ? compareRealModels(comparisonResult.changedModel, comparisonResult.originalModel)
+        : comparisonResult)
+    : null;
+
+  // 1. INTENT: simulation_action ("What happens if I remove [Component]?")
+  if (intent === 'simulation_action') {
+    const removeMatch = lower.match(/(?:what\s+happens\s+if\s+i\s+(?:remove|delete)|simulate\s+(?:removing|deleting)|if\s+i\s+(?:remove|delete))\s+([a-zA-Z0-9_\-\s]+?)(?:\?|$)/i);
+    const compQuery = removeMatch ? removeMatch[1].trim() : (selectedEntity?.name || '');
+
+    // Check if target model (V1 or V2) is specified in query
+    let resolvedTarget: 'v1' | 'v2' | null = null;
+    if (/\b(?:on|in)\s+v1\b/i.test(question) || (/\bv1\b/i.test(question) && !/\bv2\b/i.test(question))) {
+      resolvedTarget = 'v1';
+    } else if (/\b(?:on|in)\s+v2\b/i.test(question) || (/\bv2\b/i.test(question) && !/\bv1\b/i.test(question))) {
+      resolvedTarget = 'v2';
+    } else if (simulationTarget) {
+      resolvedTarget = simulationTarget;
+    }
+
+    // Disambiguation: If comparison has both V1 and V2 models, but target is ambiguous / neither selected
+    if (comparisonResult && comparisonResult.originalModel && comparisonResult.changedModel && !resolvedTarget) {
+      return 'Do you want to simulate the change on V1 or V2?';
+    }
+
+    // Determine base model for simulation
+    let simBaseModel: ArchitectureModel = model;
+    let targetLabel = '';
+    if (comparisonResult && resolvedTarget) {
+      simBaseModel = resolvedTarget === 'v1' ? comparisonResult.originalModel : comparisonResult.changedModel;
+      targetLabel = resolvedTarget.toUpperCase();
+    }
+
+    const targetComp = simBaseModel.entities.find((e) =>
+      e.name.toLowerCase() === compQuery.toLowerCase() ||
+      e.id.toLowerCase() === compQuery.toLowerCase() ||
+      compQuery.toLowerCase().includes(e.name.toLowerCase()) ||
+      e.name.toLowerCase().includes(compQuery.toLowerCase())
+    ) || (selectedEntity && simBaseModel.entities.find((e) => e.id === selectedEntity.id));
+
+    if (!targetComp) {
+      return `Component "${compQuery}" was not found in ${targetLabel ? `${targetLabel} ` : ''}architecture.`;
+    }
+
+    const simResult = ChangeSimulatorEngine.simulateChange(simBaseModel, [
+      { id: `sim-${Date.now()}`, action: 'remove_component', component_id: targetComp.id }
+    ]);
+    const direct = simResult.directly_affected_nodes.length;
+    const indirect = simResult.indirectly_affected_nodes.length;
+    const total = direct + indirect;
+    const origScore = simResult.current_risk_score.toFixed(1);
+    const simScore = simResult.hypothetical_risk_score.toFixed(1);
+    const delta = simResult.risk_delta;
+    const deltaStr = delta >= 0 ? `+${delta.toFixed(1)}` : delta.toFixed(1);
+    const broken = simResult.broken_dependencies?.length ?? 0;
+
+    let banner = targetLabel ? `SIMULATING ON ${targetLabel}: ${targetComp.name}\n\n` : '';
+    let response = `${banner}Removing ${targetComp.name}${targetLabel ? ` on ${targetLabel}` : ''} affects ${total} components.\n${direct} are directly affected and ${indirect} are downstream.\nRisk changes from ${origScore} to ${simScore} (${deltaStr}).\nThere are ${broken} broken required dependencies.`;
+
+    if (broken > 0 && simResult.broken_dependencies && simResult.broken_dependencies.length > 0) {
+      const brokenDetails = simResult.broken_dependencies.map(
+        (b) => `Component ${targetComp.name} was removed, but ${b.callerName} still depends on it. This creates a broken required dependency (+15.0 risk penalty).`
+      ).join('\n');
+      response += `\n\n${brokenDetails}`;
+    }
+
+    return response;
+  }
+
+  // 2. INTENT: simulation_status
+  if (intent === 'simulation_status') {
+    const targetLabel = simulationTarget ? simulationTarget.toUpperCase() : 'None';
+    return `**Change Simulation Status**:
+- **Active Simulation Target**: ${targetLabel}
+- **Simulation Sandbox**: In-memory isolated architecture model (Zero mutation on base models)
+- **Supported Capabilities**: Remove component, Decommission service, Calculate blast radius & broken dependencies
+- **Target Selection**: In Compare view, you can independently simulate changes on either V1 or V2.`;
+  }
+
+  // 3. INTENT: broken_dependencies
+  if (intent === 'broken_dependencies') {
+    if (comparisonResult && activeComparison) {
+      const brokenList = activeComparison.structuralRisk.brokenDependencies || [];
+      if (brokenList.length > 0) {
+        const details = brokenList.map(
+          (b, idx) => `${idx + 1}. Component ${b.removedTargetName} was removed, but ${b.callerName} still depends on it. This creates a broken required dependency (+15.0 risk penalty).`
+        ).join('\n');
+        return `**Broken Required Dependencies Detected (${brokenList.length})**:\n${details}\n\nRemoving a component while upstream callers still require it adds a +15.0 penalty per broken dependency in the Causal Risk Ledger to prevent runtime outages.`;
+      }
+      return `No broken required dependencies detected in the current architecture comparison (${compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2'}). All caller dependencies resolve cleanly.`;
+    }
+
+    if (lower.includes('what are') || lower.includes('definition') || lower.includes('explain') || lower.includes('how does')) {
+      return `**Broken Required Dependency Risk**:
 - **Definition**: When a component or database is removed or modified while upstream caller services still depend on it, TraceIQ flags a **Broken Required Dependency**.
 - **Risk Impact**: Instead of treating removal as a reduction in coupling, TraceIQ applies a **+15.0 points risk penalty** per affected caller in the Causal Risk Ledger.
 - **Why it matters**: Calling a non-existent or decommissioned service causes immediate runtime connection failures and cascade outages unless the callers are updated first.`;
-  } else if (lower.includes('blast radius') || lower.includes('ripple') || lower.includes('impact') || currentRoute === 'impact') {
+    }
+
+    return `No broken required dependencies detected in the active architecture model. All ${model.relationships.length} dependencies resolve to active components.`;
+  }
+
+  // 4. INTENT: risk_delta
+  if (intent === 'risk_delta') {
+    if (comparisonResult && activeComparison) {
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      const sr = activeComparison.structuralRisk;
+      const deltaVal = sr.delta;
+      const deltaStr = deltaVal >= 0 ? `+${deltaVal.toFixed(1)}` : deltaVal.toFixed(1);
+
+      let msg = `**Directional Risk Delta (${dirLabel})**:
+- **Source (${compareDirection === 'v2_to_v1' ? 'V2' : 'V1'})**: ${sr.originalScore.toFixed(1)}/100 [${sr.originalRiskLevel || 'LOW'}]
+- **Target (${compareDirection === 'v2_to_v1' ? 'V1' : 'V2'})**: ${sr.changedScore.toFixed(1)}/100 [${sr.changedRiskLevel || 'LOW'}]
+- **Mathematical Formula**: Risk(Target) - Risk(Source) = ${deltaStr} pts
+- **Shift Assessment**: ${sr.shiftDirection}
+- **Attribution**: ${sr.attributionStatement}`;
+
+      if (sr.brokenDependencies && sr.brokenDependencies.length > 0) {
+        msg += `\n\n**Warning**: ${sr.brokenDependencies.length} broken required dependency detected:`;
+        sr.brokenDependencies.forEach((b) => {
+          msg += `\n- Component ${b.removedTargetName} was removed, but ${b.callerName} still depends on it (+15.0 risk penalty).`;
+        });
+      }
+      return msg;
+    }
+
+    return `Risk delta measures the change in structural risk between two architecture versions (V1 and V2) or in a change simulation. Upload or select two versions in the Compare view to compute the directional risk delta.`;
+  }
+
+  // 5. INTENT: risk_explanation
+  if (intent === 'risk_explanation') {
+    const analysis = Objective2AnalysisEngine.analyzeArchitecture(model);
+    const score = Objective2AnalysisEngine.calculateDeterministicRiskScore(analysis);
+    const spofs = analysis.spofs.filter((s) => s.is_spof);
+    return `Risk is ${score.toFixed(1)}/100 because:\n- ${spofs.length} direct dependents / Single Points of Failure\n- high betweenness centrality\n- blast radius across ${analysis.critical_components.length} critical services\n- dependency concentration around central components.`;
+  }
+
+  // 6. INTENT: risk_score
+  if (intent === 'risk_score') {
+    const riskCompMatch = lower.match(/(?:what\s+is\s+(?:the\s+)?risk\s+(?:of|for)|risk\s+(?:of|for))\s+([a-zA-Z0-9_\-\s]+?)(?:\?|$)/i);
+    if (riskCompMatch || (lower.includes('risk') && selectedEntity && lower.includes(selectedEntity.name.toLowerCase()))) {
+      const compName = riskCompMatch ? riskCompMatch[1].trim() : (selectedEntity?.name || '');
+      const targetComp = model.entities.find((e) =>
+        e.name.toLowerCase() === compName.toLowerCase() ||
+        e.id.toLowerCase() === compName.toLowerCase() ||
+        compName.toLowerCase().includes(e.name.toLowerCase()) ||
+        e.name.toLowerCase().includes(compName.toLowerCase())
+      ) || selectedEntity;
+
+      if (targetComp) {
+        const analysis = Objective2AnalysisEngine.analyzeArchitecture(model);
+        const crit = analysis.critical_components.find((c) => c.component_id === targetComp.id);
+        const m = analysis.component_metrics[targetComp.id];
+        const inDeg = m ? (m.in_degree ?? m.direct_callers_count ?? 0) : 0;
+        const betweenness = typeof m?.betweenness_centrality === 'number' ? m.betweenness_centrality.toFixed(3) : '0.000';
+        const blast = m ? (m.upstream_callers_count ?? inDeg) : inDeg;
+        const isSpof = analysis.spofs.some((s) => s.component_id === targetComp.id && s.is_spof);
+        const score = crit?.criticality_score !== undefined ? crit.criticality_score.toFixed(1) : Math.min(100, Math.round(inDeg * 15 + (isSpof ? 30 : 0) + (parseFloat(betweenness) * 40))).toFixed(1);
+
+        return `Risk score: ${score}/100.\n\nMain contributors:\n- ${inDeg} direct dependent${inDeg === 1 ? '' : 's'}\n- betweenness centrality: ${betweenness}\n- blast radius: ${blast} component${blast === 1 ? '' : 's'}${isSpof ? '\n- identified as a Single Point of Failure (SPOF)' : '\n- dependency concentration around this component.'}`;
+      }
+    }
+
+    if (comparisonResult && activeComparison) {
+      const v1Analysis = Objective2AnalysisEngine.analyzeArchitecture(comparisonResult.originalModel);
+      const v2Analysis = Objective2AnalysisEngine.analyzeArchitecture(comparisonResult.changedModel);
+      const v1Score = Objective2AnalysisEngine.calculateDeterministicRiskScore(v1Analysis);
+      const v2Score = Objective2AnalysisEngine.calculateDeterministicRiskScore(v2Analysis);
+      const v1Level = Objective2AnalysisEngine.getRiskLevel(v1Score);
+      const v2Level = Objective2AnalysisEngine.getRiskLevel(v2Score);
+      const sr = activeComparison.structuralRisk;
+      const deltaStr = sr.delta >= 0 ? `+${sr.delta.toFixed(1)}` : sr.delta.toFixed(1);
+
+      return `**Architecture Risk Scores**:
+- **V1 Risk Score**: ${v1Score.toFixed(1)}/100 [${v1Level}]
+- **V2 Risk Score**: ${v2Score.toFixed(1)}/100 [${v2Level}]
+- **Directional Delta (${compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2'})**: ${deltaStr} pts (${sr.shiftDirection})`;
+    }
+
+    const analysis = Objective2AnalysisEngine.analyzeArchitecture(model);
+    const score = Objective2AnalysisEngine.calculateDeterministicRiskScore(analysis);
+    const level = Objective2AnalysisEngine.getRiskLevel(score);
+    return `Structural Risk Score: ${score.toFixed(1)}/100 [${level}].`;
+  }
+
+  // 7. INTENT: added_components
+  if (intent === 'added_components') {
+    if (comparisonResult && activeComparison) {
+      const added = activeComparison.architectureDiff.addedNodes;
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      if (added.length === 0) return `No components were added in the ${dirLabel} direction.`;
+      return `**Added Components (${dirLabel}, ${added.length} total)**:\n${added.map((c, idx) => `${idx + 1}. ${c.name} [${c.type}${c.technology ? `, ${c.technology}` : ''}]`).join('\n')}`;
+    }
+    return 'Component additions are tracked by comparing two architecture versions in the Compare tab.';
+  }
+
+  // 8. INTENT: removed_components
+  if (intent === 'removed_components') {
+    if (comparisonResult && activeComparison) {
+      const removed = activeComparison.architectureDiff.removedNodes;
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      if (removed.length === 0) return `No components were removed in the ${dirLabel} direction.`;
+      let msg = `**Removed Components (${dirLabel}, ${removed.length} total)**:\n${removed.map((c, idx) => `${idx + 1}. ${c.name} [${c.type}${c.technology ? `, ${c.technology}` : ''}]`).join('\n')}`;
+      if (activeComparison.structuralRisk.brokenDependencies && activeComparison.structuralRisk.brokenDependencies.length > 0) {
+        msg += `\n\n**Broken Dependencies Detected**:`;
+        activeComparison.structuralRisk.brokenDependencies.forEach((b) => {
+          msg += `\n- Component ${b.removedTargetName} was removed, but ${b.callerName} still depends on it. This creates a broken required dependency (+15.0 risk penalty).`;
+        });
+      }
+      return msg;
+    }
+    return 'Component removals are tracked by comparing two architecture versions in the Compare tab.';
+  }
+
+  // 9. INTENT: modified_components
+  if (intent === 'modified_components') {
+    if (comparisonResult && activeComparison) {
+      const modified = activeComparison.architectureDiff.modifiedNodes;
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      if (modified.length === 0) return `No components were modified in the ${dirLabel} direction.`;
+      return `**Modified Components (${dirLabel}, ${modified.length} total)**:\n${modified.map((c, idx) => `${idx + 1}. ${c.name} [${c.type}]`).join('\n')}`;
+    }
+    return 'Component modifications are tracked by comparing two architecture versions in the Compare tab.';
+  }
+
+  // 10. INTENT: changed_components
+  if (intent === 'changed_components') {
+    if (comparisonResult && activeComparison) {
+      const diff = activeComparison.architectureDiff;
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      return `**Changed Components (${dirLabel})**:
+- **Added (${diff.addedNodes.length})**: ${diff.addedNodes.map((c) => c.name).join(', ') || 'None'}
+- **Removed (${diff.removedNodes.length})**: ${diff.removedNodes.map((c) => c.name).join(', ') || 'None'}
+- **Modified (${diff.modifiedNodes.length})**: ${diff.modifiedNodes.map((c) => c.name).join(', ') || 'None'}`;
+    }
+    return 'Changed components are identified when comparing two architecture versions or running a change simulation.';
+  }
+
+  // 11. INTENT: comparison_summary
+  if (intent === 'comparison_summary') {
+    if (comparisonResult && activeComparison) {
+      const dirLabel = compareDirection === 'v2_to_v1' ? 'V2 → V1' : 'V1 → V2';
+      const arch = activeComparison.architectureDiff;
+      const repo = activeComparison.repositoryDiff?.summary;
+      const sr = activeComparison.structuralRisk;
+      const deltaStr = sr.delta >= 0 ? `+${sr.delta.toFixed(1)}` : sr.delta.toFixed(1);
+
+      let summary = `**Architecture Comparison Summary (${dirLabel})**:
+- **Component Changes**: +${arch.addedNodes.length} added, -${arch.removedNodes.length} removed, ${arch.modifiedNodes.length} modified.
+- **Dependency Links**: +${arch.addedRelationships.length} added, -${arch.removedRelationships.length} removed.`;
+
+      if (repo) {
+        summary += `\n- **Repository Files**: +${repo.addedFilesCount} added, -${repo.removedFilesCount} removed, ${repo.modifiedFilesCount} modified, ${repo.unchangedFilesCount} unchanged.`;
+      }
+
+      summary += `\n- **Risk Shift**: ${sr.originalScore.toFixed(1)} [${sr.originalRiskLevel || 'LOW'}] → ${sr.changedScore.toFixed(1)} [${sr.changedRiskLevel || 'LOW'}] (${deltaStr} pts, ${sr.shiftDirection}).`;
+
+      if (sr.brokenDependencies && sr.brokenDependencies.length > 0) {
+        summary += `\n- **Warning**: ${sr.brokenDependencies.length} broken required dependency detected!`;
+      }
+      return summary;
+    }
+    return `Comparison summary requires two versions to compare. Please navigate to the Compare tab to upload and compare two versions.`;
+  }
+
+  // 12. INTENT: repository_file_count
+  if (intent === 'repository_file_count') {
+    if (comparisonResult) {
+      const askedV1 = /\bv1\b/i.test(question);
+      const askedV2 = /\bv2\b/i.test(question);
+      if (askedV1) {
+        return `V1 repository contains ${comparisonResult.originalModel.inventory?.total_files ?? 0} files across ${comparisonResult.originalModel.inventory?.total_folders ?? 0} folders.`;
+      }
+      if (askedV2) {
+        return `V2 repository contains ${comparisonResult.changedModel.inventory?.total_files ?? 0} files across ${comparisonResult.changedModel.inventory?.total_folders ?? 0} folders.`;
+      }
+      const s = comparisonResult.repositoryDiff?.summary;
+      return `**Repository File Counts**:
+- **V1 Total Files**: ${comparisonResult.originalModel.inventory?.total_files ?? 0}
+- **V2 Total Files**: ${comparisonResult.changedModel.inventory?.total_files ?? 0}
+- **Repository Diff**: ${s?.addedFilesCount ?? 0} added, ${s?.removedFilesCount ?? 0} removed, ${s?.modifiedFilesCount ?? 0} modified, ${s?.unchangedFilesCount ?? 0} unchanged.`;
+    }
+    const totalFiles = model.inventory?.total_files ?? 0;
+    const totalFolders = model.inventory?.total_folders ?? 0;
+    return `The repository contains ${totalFiles} file${totalFiles === 1 ? '' : 's'} across ${totalFolders} folder${totalFolders === 1 ? '' : 's'}.`;
+  }
+
+  // 13. INTENT: repository_file_list
+  if (intent === 'repository_file_list') {
+    const files = model.inventory?.files || [];
+    if (files.length === 0) {
+      return 'No repository files are currently indexed in inventory.';
+    }
+    const preview = files.slice(0, 15).map((f, idx) => `${idx + 1}. \`${f.path}\` (${f.size_bytes ?? (f as any).size ?? 0} bytes)`).join('\n');
+    return `**Repository Files (${files.length} total)**:\n${preview}${files.length > 15 ? `\n... and ${files.length - 15} more files` : ''}`;
+  }
+
+  // 14. INTENT: file_summary
+  if (intent === 'file_summary') {
+    const fileMatch = lower.match(/(?:explain\s+file|what\s+does\s+file\s+|summarize\s+file|file\s+summary|details\s+of\s+file)\s+([a-zA-Z0-9_\-\.\/]+)(?:\?|$)/i) ||
+      lower.match(/\b(?:explain|summarize|details\s+of)\s+([a-zA-Z0-9_\-\.\/]+\.[a-zA-Z0-9]+)\b/i);
+    const fileQuery = fileMatch ? fileMatch[1].trim() : (selectedFile?.path || '');
+
+    // Disambiguation if both V1 and V2 are present
+    if (comparisonResult && comparisonResult.originalModel && comparisonResult.changedModel) {
+      const askedV1 = /\bv1\b/i.test(question);
+      const askedV2 = /\bv2\b/i.test(question);
+      if (!askedV1 && !askedV2) {
+        return 'Do you mean the V1 file or the V2 file?';
+      }
+      const targetModel = askedV1 ? comparisonResult.originalModel : comparisonResult.changedModel;
+      const f = targetModel.inventory?.files.find((x) =>
+        x.path.toLowerCase().endsWith(fileQuery.toLowerCase()) ||
+        x.name.toLowerCase() === fileQuery.toLowerCase()
+      );
+      if (!f) return `File "${fileQuery}" was not found in ${askedV1 ? 'V1' : 'V2'} repository.`;
+      return `**${askedV1 ? 'V1' : 'V2'} File Details: ${f.name}**\n- **Path**: \`${f.path}\`\n- **Size**: ${f.size_bytes ?? (f as any).size ?? 0} bytes\n- **Extension**: ${f.extension || 'none'}\n- **Role**: Discovered in repository file inventory.`;
+    }
+
+    const f = model.inventory?.files.find((x) =>
+      x.path.toLowerCase().endsWith(fileQuery.toLowerCase()) ||
+      x.name.toLowerCase() === fileQuery.toLowerCase()
+    );
+    if (f) {
+      return `**File Details: ${f.name}**\n- **Path**: \`${f.path}\`\n- **Size**: ${f.size_bytes ?? (f as any).size ?? 0} bytes\n- **Extension**: ${f.extension || 'none'}\n- **Role**: Discovered in repository file inventory.`;
+    }
+    return `File "${fileQuery}" was not found in the current repository inventory.`;
+  }
+
+  // 15. INTENT: entity_count
+  if (intent === 'entity_count') {
+    // Check if specifically asking about V1 or V2
+    if (comparisonResult) {
+      if (/\bv1\b/i.test(question)) {
+        return `${comparisonResult.originalModel.entities.length} entities in V1.\n\nThey are:\n${comparisonResult.originalModel.entities.map((e, idx) => `${idx + 1}. ${e.name} [${e.type}]`).join('\n')}`;
+      }
+      if (/\bv2\b/i.test(question)) {
+        return `${comparisonResult.changedModel.entities.length} entities in V2.\n\nThey are:\n${comparisonResult.changedModel.entities.map((e, idx) => `${idx + 1}. ${e.name} [${e.type}]`).join('\n')}`;
+      }
+    }
+
+    if (lower.includes('service')) {
+      const services = model.entities.filter((e) => e.type.toLowerCase() === 'service' || e.type.toLowerCase() === 'controller');
+      return `${services.length} services.\n\nThey are:\n${services.map((s, idx) => `${idx + 1}. ${s.name}`).join('\n') || 'None detected.'}`;
+    }
+    if (lower.includes('database')) {
+      const dbs = model.entities.filter((e) => e.type.toLowerCase() === 'database');
+      return `${dbs.length} database${dbs.length === 1 ? '' : 's'}.\n\nThey are:\n${dbs.map((d, idx) => `${idx + 1}. ${d.name}`).join('\n') || 'None detected.'}`;
+    }
+    if (lower.includes('api')) {
+      const apis = model.entities.filter((e) => e.type.toLowerCase() === 'api');
+      return `${apis.length} API${apis.length === 1 ? '' : 's'}:\n${apis.map((a, idx) => `${idx + 1}. ${a.name}`).join('\n') || 'None detected.'}`;
+    }
+
+    return `${model.entities.length} entities.\n\nThey are:\n${model.entities.map((e, idx) => `${idx + 1}. ${e.name} [${e.type}]`).join('\n')}`;
+  }
+
+  // 16. INTENT: entity_list
+  if (intent === 'entity_list') {
+    if (lower.includes('service')) {
+      const services = model.entities.filter((e) => e.type.toLowerCase() === 'service' || e.type.toLowerCase() === 'controller');
+      return `${services.length} services:\n${services.map((s, idx) => `${idx + 1}. ${s.name}`).join('\n') || 'None detected.'}`;
+    }
+    if (lower.includes('database')) {
+      const dbs = model.entities.filter((e) => e.type.toLowerCase() === 'database');
+      return `${dbs.length} database${dbs.length === 1 ? '' : 's'}:\n${dbs.map((d, idx) => `${idx + 1}. ${d.name}`).join('\n') || 'None detected.'}`;
+    }
+    if (lower.includes('api')) {
+      const apis = model.entities.filter((e) => e.type.toLowerCase() === 'api');
+      return `${apis.length} API${apis.length === 1 ? '' : 's'}:\n${apis.map((a, idx) => `${idx + 1}. ${a.name}`).join('\n') || 'None detected.'}`;
+    }
+
+    return `${model.entities.length} components:\n${model.entities.map((e, idx) => `${idx + 1}. ${e.name} [${e.type}${e.technology ? `, ${e.technology}` : ''}]`).join('\n')}`;
+  }
+
+  // 17. INTENT: dependency_query
+  if (intent === 'dependency_query') {
+    // Inbound: "What depends on [Component]?" / "Who calls [Component]?"
+    const dependsOnTargetMatch = lower.match(/(?:what\s+depends\s+on|who\s+calls|what\s+calls)\s+([a-zA-Z0-9_\-\s]+?)(?:\?|$)/i);
+    if (dependsOnTargetMatch || (lower.includes('what depends on') && selectedEntity)) {
+      const compName = dependsOnTargetMatch ? dependsOnTargetMatch[1].trim() : (selectedEntity?.name || '');
+      const targetComp = model.entities.find((e) =>
+        e.name.toLowerCase() === compName.toLowerCase() ||
+        e.id.toLowerCase() === compName.toLowerCase() ||
+        compName.toLowerCase().includes(e.name.toLowerCase()) ||
+        e.name.toLowerCase().includes(compName.toLowerCase())
+      ) || selectedEntity;
+
+      if (targetComp) {
+        const callers = model.relationships.filter(
+          (r) => r.target === targetComp.id || r.target === targetComp.name
+        );
+        return `${callers.length} component${callers.length === 1 ? '' : 's'} depend on ${targetComp.name}:\n${callers.map((c, idx) => {
+          const src = model.entities.find((e) => e.id === c.source || e.name === c.source);
+          return `${idx + 1}. ${src?.name || c.source} (via ${c.protocol || c.type})`;
+        }).join('\n') || 'None. No other components depend on this component.'}`;
+      }
+    }
+
+    // Outbound: "What does [Component] depend on?"
+    const whatDoesDependOnMatch = lower.match(/what\s+does\s+([a-zA-Z0-9_\-\s]+?)\s+depend\s+on(?:\?|$)/i);
+    if (whatDoesDependOnMatch || (lower.includes('depend on') && !lower.includes('what depends on') && selectedEntity)) {
+      const compName = whatDoesDependOnMatch ? whatDoesDependOnMatch[1].trim() : (selectedEntity?.name || '');
+      const sourceComp = model.entities.find((e) =>
+        e.name.toLowerCase() === compName.toLowerCase() ||
+        e.id.toLowerCase() === compName.toLowerCase() ||
+        compName.toLowerCase().includes(e.name.toLowerCase()) ||
+        e.name.toLowerCase().includes(compName.toLowerCase())
+      ) || selectedEntity;
+
+      if (sourceComp) {
+        const callees = model.relationships.filter(
+          (r) => r.source === sourceComp.id || r.source === sourceComp.name
+        );
+        return `${sourceComp.name} depends on ${callees.length} component${callees.length === 1 ? '' : 's'}:\n${callees.map((c, idx) => {
+          const tgt = model.entities.find((e) => e.id === c.target || e.name === c.target);
+          return `${idx + 1}. ${tgt?.name || c.target} (via ${c.protocol || c.type})`;
+        }).join('\n') || 'None. This component has no outgoing dependencies.'}`;
+      }
+    }
+  }
+
+  // 18. INTENT: impact_analysis
+  if (intent === 'impact_analysis') {
+    const entityMatch = model.entities.find((e) => lower.includes(e.name.toLowerCase()) || lower.includes(e.id.toLowerCase())) || selectedEntity;
+    if (entityMatch) {
+      const sim = ChangeSimulatorEngine.simulateChange(model, [
+        { id: `sim-${Date.now()}`, action: 'remove_component', component_id: entityMatch.id }
+      ]);
+      const direct = sim.directly_affected_nodes.length;
+      const indirect = sim.indirectly_affected_nodes.length;
+      const total = direct + indirect;
+      const blastPct = model.entities.length > 0 ? ((total / model.entities.length) * 100).toFixed(0) : '0';
+
+      return `**Impact Analysis for ${entityMatch.name}**:
+- **Blast Radius**: ${total} of ${model.entities.length} components (${blastPct}% of system)
+- **Direct Dependents (Depth 1)**: ${direct} components (${sim.directly_affected_nodes.map((n) => n.name).join(', ') || 'None'})
+- **Downstream Ripple (Depth 2+)**: ${indirect} components (${sim.indirectly_affected_nodes.map((n) => n.name).join(', ') || 'None'})
+- **Cascade Severity**: ${total > 5 ? 'High' : total > 2 ? 'Moderate' : 'Low'}`;
+    }
+
     return `**Impact Analysis & Blast Radius**:
 - **Blast Radius**: Measures the total proportion of services and components in the system affected if a target component changes or goes down.
 - **Direct vs Transitive**:
   - **Direct Dependencies (Depth 1)**: Immediate callers and callees connected directly to the component.
   - **Ripple Chain (Depth 2+)**: Cascading indirect dependencies that feel downstream or upstream effects across multiple hops.
 - **Cascade Severity**: Categorized as Minimal, Moderate, High, or Critical based on ripple depth and total impacted node count.`;
-  } else if (lower.includes('spof') || lower.includes('single point') || lower.includes('failure')) {
-    const callCounts: Record<string, number> = {};
-    model.relationships.forEach((r) => {
-      callCounts[r.target] = (callCounts[r.target] || 0) + 1;
-    });
-    const topCoupled = Object.entries(callCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  }
 
-    return `**Single Points of Failure (SPOF)**:
-- **Definition**: Central components that many services rely on without any alternative or redundant fallback path. If this component fails, all dependent services fail with it.
-- **Current Top Hubs in System**:
-${topCoupled.map(([target, count]) => {
-  const e = model.entities.find((x) => x.id === target || x.name === target);
-  return `  - **${e?.name || target}**: ${count} incoming dependency callers`;
-}).join('\n') || '  - None identified.'}`;
-  } else if (lower.includes('circular') || lower.includes('cycle') || lower.includes('loop')) {
-    return `**Circular Dependency Loops**:
-- **Definition**: Occurs when Service A calls Service B, which directly or indirectly calls Service A back (e.g. A → B → C → A).
-- **Risk**: Tight circular coupling complicates deployment sequencing, prevents graceful shutdown, and can amplify recursive cascade failures under load.
-- You can inspect active loops in the **Structural Risk** tab.`;
-  } else if (lower.includes('causal') || lower.includes('ledger')) {
-    return `**Causal Risk Ledger**:
-- **Deterministic Breakdown**: Every change in risk (Δ) is itemized with exact point values and reasons.
-- **Examples of Ledger Items**:
-  - \`Broken Required Dependency Detected\`: **+15.0 pts** (per broken caller)
-  - \`New Dependency Added\`: **+2.5 pts**
-  - \`Safe Decoupling\`: **-3.5 pts** (only when no callers remain orphaned)
-  - \`Cycle Created\`: **+20.0 pts**
-- Transparent math ensures engineers understand exactly *why* risk increased or decreased.`;
-  } else if (lower.includes('summarize') || lower.includes('overview') || lower.includes('architecture')) {
-    const services = model.entities.filter((e) => e.type.toLowerCase() === 'service').length;
-    const dbs = model.entities.filter((e) => e.type.toLowerCase() === 'database').length;
-    const apis = model.entities.filter((e) => e.type.toLowerCase() === 'api').length;
-    const external = model.entities.filter((e) => e.type.toLowerCase().includes('external')).length;
+  // 19. INTENT: evidence_lookup
+  if (intent === 'evidence_lookup') {
+    const entityMatch = model.entities.find((e) => lower.includes(e.name.toLowerCase()) || lower.includes(e.id.toLowerCase()));
+    let rel: ArchitectureRelationship | undefined;
+    if (entityMatch) {
+      rel = model.relationships.find((r) =>
+        (r.source === entityMatch.id || r.target === entityMatch.id || r.source === entityMatch.name || r.target === entityMatch.name) &&
+        r.sourceEvidence?.snippet
+      );
+    }
+    if (!rel) {
+      rel = selectedRelationship ||
+        model.relationships.find(
+          (r) => r.sourceEvidence?.file && r.sourceEvidence.snippet && !r.sourceEvidence.snippet.startsWith('No source-code block')
+        ) ||
+        model.relationships[0];
+    }
 
-    return `**System Overview**: \`${model.systemName}\` (v${model.version})
+    if (rel && rel.sourceEvidence) {
+      return `TraceIQ detected this dependency from:\n\nFile: ${rel.sourceEvidence.file}\nLines: ${rel.sourceEvidence.lineRange || rel.sourceEvidence.line || 'N/A'}\nMethod: ${rel.sourceEvidence.method || 'Source Code Extractor'}\nConfidence: ${rel.sourceEvidence.confidence || 'HIGH'}\n\nEvidence:\n${rel.sourceEvidence.snippet}`;
+    }
+    return `TraceIQ detected dependencies from AST parsing, import statements, configuration manifests, and framework decorators across the repository.`;
+  }
+
+  // 20. INTENT: architecture_summary
+  if (intent === 'architecture_summary') {
+    // Flow check
+    if (lower.includes('flow') || lower.includes('how does the architecture work') || lower.includes('how does architecture work')) {
+      const apps = model.entities.filter((e) => e.type.toLowerCase() === 'application');
+      const coreServices = model.entities.filter((e) => e.type.toLowerCase() === 'service' || e.type.toLowerCase() === 'controller');
+      const dataStores = model.entities.filter((e) => e.type.toLowerCase() === 'database');
+      const externals = model.entities.filter((e) => e.type.toLowerCase().includes('external'));
+
+      let flow = `Architecture Flow for ${model.systemName}:\n\n`;
+      if (apps.length > 0) {
+        flow += `1. User Entry Points:\n${apps.map((a) => `   - ${a.name} (${a.technology})`).join('\n')}\n`;
+      }
+      if (coreServices.length > 0) {
+        flow += `2. Core Services:\n${coreServices.slice(0, 6).map((s) => `   - ${s.name} (${s.technology})`).join('\n')}${coreServices.length > 6 ? `\n   - ... and ${coreServices.length - 6} more services` : ''}\n`;
+      }
+      if (dataStores.length > 0) {
+        flow += `3. Data Storage:\n${dataStores.map((d) => `   - ${d.name} (${d.technology})`).join('\n')}\n`;
+      }
+      if (externals.length > 0) {
+        flow += `4. External Integrations:\n${externals.map((x) => `   - ${x.name} (${x.technology})`).join('\n')}\n`;
+      }
+      flow += `\nTraceIQ maps ${model.relationships.length} active dependency edges connecting these components.`;
+      return flow;
+    }
+
+    const sCount = model.entities.filter((e) => e.type.toLowerCase() === 'service').length;
+    const dCount = model.entities.filter((e) => e.type.toLowerCase() === 'database').length;
+    const aCount = model.entities.filter((e) => e.type.toLowerCase() === 'api').length;
+    const xCount = model.entities.filter((e) => e.type.toLowerCase().includes('external')).length;
+
+    return `**System Overview**: \`${model.systemName}\` (v${model.version || '1.0.0'})
 - **Total Components**: ${model.entities.length}
-- **Services**: ${services}
-- **Databases/Stores**: ${dbs}
-- **APIs**: ${apis}
-- **External Systems**: ${external}
+- **Services**: ${sCount}
+- **Databases/Stores**: ${dCount}
+- **APIs**: ${aCount}
+- **External Systems**: ${xCount}
 - **Relationships / Calls**: ${model.relationships.length}
 - **Ingestion Mode**: ${model.inputType === 'codebase' ? 'Raw Codebase / ZIP' : 'Architecture Blueprint JSON'}`;
-  } else if (lower.includes('risk') || lower.includes('security') || lower.includes('coupling')) {
-    const callCounts: Record<string, number> = {};
-    model.relationships.forEach((r) => {
-      callCounts[r.target] = (callCounts[r.target] || 0) + 1;
-    });
-    const topCoupled = Object.entries(callCounts).sort((a, b) => b[1] - a[1]).slice(0, 3);
+  }
 
-    return `**Architectural Risk Analysis**:
-1. **Critical High-Dependency Hubs**:
-${topCoupled
-  .map(([target, count]) => {
-    const e = model.entities.find((x) => x.id === target || x.name === target);
-    return `   - **${e?.name || target}**: ${count} incoming dependencies (potential Single Point of Failure)`;
-  })
-  .join('\n')}
-2. **Security & Boundary Crossing**:
-   - Total external integrations: ${model.entities.filter((e) => e.type.toLowerCase().includes('external')).length}
-   - Unencrypted/Default protocol channels flagged in Insights tab.`;
-  } else if (lower.includes('retention') || lower.includes('inventory') || lower.includes('file')) {
-    const totalFiles = model.inventory?.total_files || 0;
-    const totalFolders = model.inventory?.total_folders || 0;
-    return `**100% Repository Retention Verification**:
-- **Discovered Files**: ${totalFiles}
-- **Discovered Directories**: ${totalFolders}
-- **Guarantee**: Every single uploaded file (including configs, scripts, documentation, binary files) is preserved in the Repository Inventory catalog without loss or filtering.`;
-  } else if (lower.includes('provenance') || lower.includes('evidence') || lower.includes('citation')) {
-    return `**Source Evidence & Provenance**:
-- **Ground Truth**: Reconstructed entities and relationships are linked to physical source code citations (file paths, line numbers, and extracted code snippets).
-- **Zero Hallucination**: No component or link is invented without verifiable evidence in the codebase.
-- Navigate to **Source Evidence** in the sidebar to review full audit trails.`;
-  } else if (lower.includes('service') && (lower.includes('list') || lower.includes('what') || lower.includes('show'))) {
-    const serviceNames = model.entities.filter((e) => e.type.toLowerCase() === 'service' || e.type.toLowerCase() === 'controller').map((e) => e.name);
-    return `**Services in ${model.systemName} (${serviceNames.length})**:\n${serviceNames.map((s) => `- ${s}`).join('\n') || 'None detected.'}`;
-  } else if (lower.includes('database') && (lower.includes('list') || lower.includes('what') || lower.includes('show'))) {
-    const dbNames = model.entities.filter((e) => e.type.toLowerCase() === 'database').map((e) => e.name);
-    return `**Databases in ${model.systemName} (${dbNames.length})**:\n${dbNames.map((d) => `- ${d}`).join('\n') || 'None detected.'}`;
-  } else if (selectedEntity && (lower.includes(selectedEntity.name.toLowerCase()) || lower.includes('analyze') || lower.includes('component'))) {
-    const incoming = model.relationships.filter((r) => r.target === selectedEntity.id || r.target === selectedEntity.name);
-    const outgoing = model.relationships.filter((r) => r.source === selectedEntity.id || r.source === selectedEntity.name);
+  // 21. INTENT: unsupported (Polite redirect)
+  if (intent === 'unsupported') {
+    return "I'm here to help you understand TraceIQ's architecture, dependencies, evidence, risks, impact analysis, comparisons, and change simulation. Ask me about one of those.";
+  }
 
-    return `**Component Profile: ${selectedEntity.name}**:
-- **Type**: ${selectedEntity.type}
-- **Technology**: ${selectedEntity.technology}
-- **Source File**: \`${selectedEntity.metadata?.filePath || 'Reconstructed'}\`
-- **Inbound Calls (${incoming.length})**: ${incoming.map((r) => r.source).join(', ') || 'None'}
-- **Outbound Calls (${outgoing.length})**: ${outgoing.map((r) => r.target).join(', ') || 'None'}`;
-  } else if (lower.includes('compare') || lower.includes('difference') || lower.includes('version')) {
-    return `**Direct Version Comparison**:
-- **Inventory Diff**: Compares uploaded V1 and V2 models file-by-file (Added, Removed, Modified, Unchanged) with 100% file retention.
-- **Architectural Diff**: Highlights new components, removed components, and changed dependency links.
-- Upload any two ZIP codebases or JSON blueprints in the Compare view to run side-by-side verification.`;
-  } else if (lower.includes('simulat') || lower.includes('what if') || lower.includes('change') || currentRoute === 'simulator') {
-    return `**Hypothetical Change Simulator (Objective 3)**:
-- **Sandbox Isolation**: Proposed component or dependency additions/removals run strictly in an in-memory deep copy with zero mutation to active files.
-- **Propagation Tracing**: Traces direct impacts and cascading ripples through upstream callers.
-- **Broken Dependency Detection**: Removing a component that has callers adds **+15.0 pts** risk per caller.
-- **Causal Risk Ledger**: Itemizes points attribution (Δ) derived deterministically from graph metrics.`;
-  } else {
-    // Check if user is asking about a specific named component
-    const matchedEntity = model.entities.find((e) => lower.includes(e.name.toLowerCase()) || lower.includes(e.id.toLowerCase()));
-    if (matchedEntity) {
-      const incoming = model.relationships.filter((r) => r.target === matchedEntity.id || r.target === matchedEntity.name);
-      const outgoing = model.relationships.filter((r) => r.source === matchedEntity.id || r.source === matchedEntity.name);
-      return `**Component Details: ${matchedEntity.name}**:
-- **Type**: ${matchedEntity.type}
-- **Technology**: ${matchedEntity.technology}
-- **File**: \`${matchedEntity.metadata?.filePath || 'Reconstructed'}\`
-- **Callers (${incoming.length})**: ${incoming.map((r) => r.source).join(', ') || 'None'}
-- **Dependencies (${outgoing.length})**: ${outgoing.map((r) => r.target).join(', ') || 'None'}`;
-    } else {
-      const domainPatterns = [
-        /\btraceiq/i, /\barchitect/i, /\bcomponent/i, /\bservice/i, /\bapis?\b/i, /\bendpoint/i,
-        /\bdatabase/i, /\bdb\b/i, /\bstor(e|age)/i, /\brisk/i, /\bdepend/i, /\bcaller/i,
-        /\bblast\s*radius/i, /\bripple/i, /\bspof\b/i, /\bsingle\s+point/i, /\bcycl(e|ic)/i,
-        /\bloop/i, /\bcircular/i, /\bledger/i, /\bcausal/i, /\binventory/i, /\bfiles?\b/i,
-        /\bfolders?\b/i, /\bretention/i, /\bevidence/i, /\bprovenance/i, /\bcitation/i,
-        /\bcompare/i, /\bdiff\b/i, /\bsimulat/i, /\bchange/i, /\bmodels?\b/i, /\bsystems?\b/i,
-        /\bnodes?\b/i, /\bedges?\b/i, /\bversions?\b/i, /\bspring\b/i, /\bflask\b/i,
-        /\bdocker\b/i, /\bkafka\b/i, /\bgrpc\b/i, /\bmysql\b/i, /\bpostgres\b/i,
-        /\bredis\b/i, /\bblast\b/i, /\bpropagation/i, /\bimpact/i, /\bpackages?\b/i, /\bmanifest/i,
-      ];
-      const isDomainQuestion = domainPatterns.some((pattern) => pattern.test(lower));
-
-      if (!isDomainQuestion) {
-        return "I'm here to help you understand and use TraceIQ. You can ask me about the architecture, dependencies, risks, changes, evidence, or other TraceIQ functions.";
-      }
-
-      return `I analyzed your query against the current architecture model:
+  return `I analyzed your query against the current architecture model:
 - **System**: \`${model.systemName}\`
 - **Active Components**: ${model.entities.length} nodes registered.
 - **Active Dependencies**: ${model.relationships.length} directional edges.
 - You can ask me specific questions about services, databases, blast radius, risk shifts, or change simulations.`;
-    }
-  }
 };

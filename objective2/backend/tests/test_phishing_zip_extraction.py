@@ -5,7 +5,11 @@ import pytest
 from app.services.codebase_service import CodebaseService
 from app.services.pipeline_service import AnalysisPipeline
 
-REAL_ZIP_PATH = r'C:\Users\prana\Downloads\phishing-ai-extention-main (1).zip'
+REAL_ZIP_PATHS = [
+    os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', 'testing files', 'phishing-ai-extention-main (1).zip')),
+    r'C:\Users\prana\Downloads\phishing-ai-extention-main (1).zip',
+]
+REAL_ZIP_PATH = next((p for p in REAL_ZIP_PATHS if os.path.exists(p)), REAL_ZIP_PATHS[0])
 
 @pytest.mark.skipif(not os.path.exists(REAL_ZIP_PATH), reason='Real test zip not present on machine')
 def test_real_phishing_zip_ingestion_and_relationship_extraction():

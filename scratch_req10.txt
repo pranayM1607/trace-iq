@@ -1,0 +1,611 @@
+<USER_REQUEST>
+TRACEIQ ASSISTANT + BIDIRECTIONAL ARCHITECTURE SIMULATION
+— FACTUAL QUERY ROUTING, GROUNDED ANSWERS, AND ARCHITECTURE-DIRECTION HARDENING
+
+Audit and fix the TraceIQ Assistant and Compare/Change Simulator behavior.
+
+IMPORTANT:
+Do not redesign TraceIQ.
+Do not add generic chatbot behavior.
+Do not invent answers.
+Do not hardcode current project values.
+Do not assume V1 is always correct.
+Do not assume V2 is always correct.
+
+TraceIQ must treat V1 and V2 as two architecture states that can be compared in either direction.
+
+The assistant must answer directly from the active TraceIQ data/model.
+
+==================================================
+1. CORE ARCHITECTURE PRINCIPLE
+==================================================
+
+V1 and V2 are architecture states, not automatically:
+
+V1 = correct
+V2 = incorrect
+
+or:
+
+V1 = baseline truth
+V2 = proposed truth
+
+The user may upload:
+
+Case A:
+V1 = Existing/Baseline
+V2 = Proposed/Changed
+
+OR:
+
+Case B:
+V1 = Proposed/Changed
+V2 = Existing/Baseline
+
+OR:
+
+Case C:
+Both are simply two versions that the user wants to compare.
+
+Therefore:
+
+- Preserve the labels V1 and V2.
+- Do not interpret "V1" as automatically correct.
+- Do not interpret "V2" as automatically correct.
+- Comparison must describe structural differences objectively.
+- Risk must be calculated independently for each architecture.
+- Risk delta must be directional and explicitly state the direction.
+- Impact analysis must specify which architecture is being used as the starting state.
+- Change Simulator must be available for BOTH V1 and V2.
+
+Example:
+
+V1 risk = 43
+V2 risk = 18
+
+Do NOT automatically say:
+
+"V2 is safer because it has lower risk."
+
+Instead say:
+
+"V1 structural risk is 43/100.
+V2 structural risk is 18/100.
+The modeled structural-risk delta from V1 → V2 is -25 points."
+
+If V2 removed an important component and created broken dependencies, the system must separately report those structural breakages.
+
+A lower aggregate score must NEVER hide or override detected broken dependencies.
+
+==================================================
+2. COMPARE DIRECTION
+==================================================
+
+The Compare page must support:
+
+V1 → V2
+
+AND:
+
+V2 → V1
+
+The user must be able to explicitly choose the comparison direction.
+
+Example UI:
+
+COMPARE DIRECTION
+
+[ V1 → V2 ]
+
+or:
+
+[ V2 → V1 ]
+
+The selected direction controls:
+
+- change interpretation
+- added components
+- removed components
+- added dependencies
+- removed dependencies
+- impact analysis
+- risk delta wording
+- change story
+- evidence context
+
+Example:
+
+V1 → V2:
+
+"PaymentService was removed in V2."
+
+V2 → V1:
+
+"PaymentService was added in V1."
+
+Both are correct depending on comparison direction.
+
+Do not duplicate architecture data.
+Use the same two uploaded architecture models and reverse the comparison deterministically.
+
+==================================================
+3. RISK MUST BE CALCULATED INDEPENDENTLY
+==================================================
+
+Calculate:
+
+V1 Risk Score
+V2 Risk Score
+
+independently from the actual architecture/risk engine.
+
+Then calculate:
+
+Directional Risk Delta:
+
+Delta(V1 → V2) = Risk(V2) - Risk(V1)
+
+Delta(V2 → V1) = Risk(V1) - Risk(V2)
+
+Example:
+
+V1 = 43
+V2 = 18
+
+V1 → V2:
+
+43 → 18
+Delta = -25
+
+V2 → V1:
+
+18 → 43
+Delta = +25
+
+The underlying architecture risk values remain unchanged.
+
+Only the comparison direction changes.
+
+IMPORTANT:
+
+Do not use "fewer nodes = lower risk" as a general rule.
+
+Removing components can:
+
+- reduce coupling
+- reduce complexity
+- remove obsolete dependencies
+
+BUT it can also:
+
+- break required dependencies
+- remove critical services
+- remove databases
+- increase failure exposure
+- disconnect required callers
+- create unresolved references
+
+Therefore the risk engine must consider the actual structural risk factors.
+
+==================================================
+4. BROKEN DEPENDENCY PRIORITY
+==================================================
+
+Broken required dependencies must be explicitly reported.
+
+Example:
+
+V1:
+
+OrderService → PaymentService
+
+V2:
+
+PaymentService removed.
+
+TraceIQ must report:
+
+"PaymentService was removed while OrderService still depends on it."
+
+Then calculate the corresponding risk contribution using the deterministic risk engine.
+
+IMPORTANT:
+
+A lower overall numerical risk score must NOT cause TraceIQ to describe a structurally broken architecture as simply "lower risk."
+
+Instead provide both:
+
+OVERALL STRUCTURAL RISK:
+V1 = 43
+V2 = 18
+
+STRUCTURAL BREAKAGE:
+2 broken required dependencies
+
+Then explain why the aggregate score changed and what critical breakages exist.
+
+Never hide serious dependency breakage behind the aggregate score.
+
+==================================================
+5. CHANGE SIMULATOR — SUPPORT BOTH V1 AND V2
+==================================================
+
+CURRENT PROBLEM:
+
+The current Compare page exposes the Change Simulator only for V2.
+
+This is insufficient.
+
+The Change Simulator must support:
+
+[ Simulate on V1 ]
+
+[ Simulate on V2 ]
+
+The user must be able to select the target architecture.
+
+Example UI:
+
+CHANGE SIMULATOR
+
+Simulation Target:
+
+○ V1
+○ V2
+
+Then:
+
+STAGE A SIMULATED CHANGE
+
+Change Type:
+
+- Remove Component
+- Add Component
+- Add Dependency
+- Remove Dependency
+
+The selected architecture becomes the isolated simulation base.
+
+==================================================
+6. SIMULATOR MUST BE ISOLATED
+==================================================
+
+When the user chooses:
+
+Simulate on V1
+
+create an in-memory deep clone of V1.
+
+When the user chooses:
+
+Simulate on V2
+
+create an in-memory deep clone of V2.
+
+Never mutate:
+
+- uploaded V1
+- uploaded V2
+- repository inventory
+- architecture snapshots
+- comparison results
+
+The simulation must be sandboxed.
+
+Example:
+
+V1 = 43 risk
+
+User chooses:
+
+Simulate on V1
+
+Remove PaymentService.
+
+TraceIQ calculates:
+
+Original V1:
+43
+
+Simulated V1:
+X
+
+Delta:
+X - 43
+
+and reports affected components and broken dependencies.
+
+Similarly:
+
+User chooses:
+
+Simulate on V2
+
+Remove PaymentService.
+
+Calculate independently from V2.
+
+==================================================
+7. SIMULATOR RESULT MUST SAY WHICH ARCHITECTURE WAS SIMULATED
+==================================================
+
+Never simply say:
+
+"Baseline architecture."
+
+Instead show:
+
+SIMULATING V1
+
+or:
+
+SIMULATING V2
+
+Example:
+
+"Simulation target: V1
+Original risk: 43/100
+Simulated risk: 67/100
+Risk delta: +24"
+
+OR:
+
+"Simulation target: V2
+Original risk: 18/100
+Simulated risk: 31/100
+Risk delta: +13"
+
+==================================================
+8. ASSISTANT MUST KNOW SIMULATION CONTEXT
+==================================================
+
+If the user asks:
+
+"What happens if I remove PaymentService?"
+
+The assistant must determine the active simulation target.
+
+If V1 is selected:
+
+"On V1, removing PaymentService would..."
+
+If V2 is selected:
+
+"On V2, removing PaymentService would..."
+
+If neither is selected:
+
+Ask:
+
+"Do you want to simulate the change on V1 or V2?"
+
+Do not guess.
+
+==================================================
+9. IMPLEMENT QUERY INTENT ROUTING
+==================================================
+
+Support at minimum:
+
+- entity_count
+- entity_list
+- repository_file_count
+- repository_file_list
+- architecture_summary
+- risk_score
+- risk_explanation
+- risk_delta
+- dependency_query
+- broken_dependencies
+- changed_components
+- added_components
+- removed_components
+- modified_components
+- impact_analysis
+- evidence_lookup
+- simulation_status
+- comparison_summary
+- file/repository_summary
+- unsupported/unrelated
+
+Do not map unrelated questions to arbitrary predefined responses.
+
+==================================================
+10. ENTITY QUESTIONS
+==================================================
+
+Example:
+
+"How many different entities are there?"
+
+Return the exact count from the active architecture model.
+
+Then list the entities.
+
+Example:
+
+"V1 contains 24 entities."
+
+Then:
+
+- Entity 1
+- Entity 2
+- Entity 3
+...
+
+If the user explicitly asks about V2, use V2.
+
+If the user asks about both, return both.
+
+==================================================
+11. RISK QUESTIONS
+==================================================
+
+Example:
+
+"What is the risk of V1?"
+
+Return:
+
+- exact score
+- risk level
+- relevant contributors
+
+Example:
+
+"V1 risk score is 43/100 (Medium)."
+
+If the user asks:
+
+"How did you calculate that?"
+
+Return the actual deterministic risk breakdown from the risk engine.
+
+Never invent a calculation.
+
+==================================================
+12. COMPARISON QUESTIONS
+==================================================
+
+Example:
+
+"What changed between V1 and V2?"
+
+Return actual:
+
+- added components
+- removed components
+- modified components
+- added dependencies
+- removed dependencies
+- unchanged components where relevant
+- repository file changes
+- V1 risk
+- V2 risk
+- directional risk delta
+
+Example:
+
+"V1 → V2:
+
+6 components removed
+2 components added
+4 dependencies removed
+1 dependency added
+
+Risk:
+V1 = 43/100
+V2 = 18/100
+Delta = -25"
+
+Then separately identify any broken dependencies or critical structural changes.
+
+==================================================
+13. DEPENDENCY QUESTIONS
+==================================================
+
+Example:
+
+"What does PaymentService depend on?"
+
+Query the actual relationship graph.
+
+Return:
+
+- target
+- relationship type
+- direction
+- evidence when available
+
+Example:
+
+"PaymentService → PaymentDB (QUERIES)"
+
+Do not infer relationships that are not present.
+
+==================================================
+14. BROKEN DEPENDENCIES
+==================================================
+
+Example:
+
+"What are the broken dependencies?"
+
+Return actual broken dependencies.
+
+For each:
+
+- caller
+- missing target
+- relationship type
+- evidence
+- risk contribution if calculated
+
+==================================================
+15. FILE / REPOSITORY QUESTIONS
+==================================================
+
+Example:
+
+"What is this file about?"
+
+If one file is selected:
+
+Summarize that actual file.
+
+If two repositories are loaded and the question is ambiguous:
+
+"Do you mean the V1 file or the V2 file?"
+
+Do NOT answer with repository-retention information unless explicitly asked.
+
+==================================================
+16. EVIDENCE
+==================================================
+
+When answering:
+
+"Why?"
+
+"How do you know?"
+
+"Where did this come from?"
+
+"Show me the evidence."
+
+Use the actual evidence attached to the entity/relationship.
+
+Return:
+
+- file path
+- exact line range
+- COMPLETE RELEVANT SOURCE CODE BLOCK
+- extraction method
+- confidence
+
+IMPORTANT:
+
+If the evidence starts at line 19 and the relevant code block continues to line 24, show:
+
+Lines 19–24
+
+and the COMPLETE code block.
+
+Do NOT show only:
+
+Line 19
+
+Do NOT show only one line when the actual evidence is a multi-line statement/block.
+
+Example:
+
+Evidence:
+services/payment/paymentService.js
+Lines 19–24
+
+```text
+[complete relevant code from lines 19–24]
+</USER_REQUEST>
+<ADDITIONAL_METADATA>
+The current local time is: 2026-09-22T21:09:20+05:30.
+</ADDITIONAL_METADATA>

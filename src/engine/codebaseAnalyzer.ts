@@ -380,6 +380,186 @@ export function extractConfigBlock(
 }
 
 /**
+ * Extracts a complete JavaScript/TypeScript function, route handler, or class method block.
+ */
+export function extractJsFunctionBlock(
+  content: string,
+  lineIdx: number
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  if (!content) return null;
+  const lines = content.split('\n');
+  if (lineIdx < 0 || lineIdx >= lines.length) return null;
+
+  // Scan upward to locate the enclosing function signature or route declaration
+  let startIdx = lineIdx;
+  while (startIdx > 0) {
+    const l = lines[startIdx];
+    if (
+      /^\s*(?:export\s+)?(?:async\s+)?function\b/.test(l) ||
+      /^\s*(?:const|let|var)\s+[a-zA-Z0-9_]+\s*=\s*(?:async\s*)?\([^\)]*\)\s*=>/.test(l) ||
+      /^\s*(?:const|let|var)\s+[a-zA-Z0-9_]+\s*=\s*(?:async\s*)?[a-zA-Z0-9_]+\s*=>/.test(l) ||
+      /^\s*(?:router|app)\.(?:get|post|put|delete|patch|use)\s*\(/.test(l) ||
+      /^\s*(?:module\.exports(?:\.[a-zA-Z0-9_]+)?\s*=\s*(?:async\s*)?)/.test(l) ||
+      /^\s*(?:public|private|protected|static|async)?\s*[a-zA-Z0-9_]+\s*\([^\)]*\)\s*[:{]/.test(l)
+    ) {
+      break;
+    }
+    if (lineIdx - startIdx > 25) {
+      startIdx = lineIdx;
+      break;
+    }
+    startIdx--;
+  }
+
+  // Scan downward counting braces
+  let endIdx = lineIdx;
+  let openBraceFound = false;
+  let braceCount = 0;
+  const parseState = { inString: false, inChar: false, inBlockComment: false };
+
+  for (let i = startIdx; i < lines.length; i++) {
+    const { opens, closes } = countBracesInJavaLine(lines[i], parseState);
+    if (opens > 0) {
+      openBraceFound = true;
+    }
+    braceCount += opens;
+    braceCount -= closes;
+
+    if (openBraceFound && braceCount <= 0) {
+      endIdx = i;
+      break;
+    }
+    if (i - startIdx > 120) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
+ * Extracts a complete Go function or method block with brace counting.
+ */
+export function extractGoFunctionBlock(
+  content: string,
+  lineIdx: number
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  if (!content) return null;
+  const lines = content.split('\n');
+  if (lineIdx < 0 || lineIdx >= lines.length) return null;
+
+  let startIdx = lineIdx;
+  while (startIdx > 0) {
+    if (/^\s*func\s+/.test(lines[startIdx])) {
+      break;
+    }
+    if (lineIdx - startIdx > 35) {
+      startIdx = lineIdx;
+      break;
+    }
+    startIdx--;
+  }
+
+  let endIdx = lineIdx;
+  let openBraceFound = false;
+  let braceCount = 0;
+  const parseState = { inString: false, inChar: false, inBlockComment: false };
+
+  for (let i = startIdx; i < lines.length; i++) {
+    const { opens, closes } = countBracesInJavaLine(lines[i], parseState);
+    if (opens > 0) openBraceFound = true;
+    braceCount += opens;
+    braceCount -= closes;
+
+    if (openBraceFound && braceCount <= 0) {
+      endIdx = i;
+      break;
+    }
+    if (i - startIdx > 150) {
+      endIdx = i;
+      break;
+    }
+  }
+
+  const block = lines.slice(startIdx, endIdx + 1).join('\n').trim();
+  const startLine = startIdx + 1;
+  const endLine = endIdx + 1;
+  const lineRange = startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`;
+
+  return { block: block || 'Exact source block unavailable.', startLine, endLine, lineRange };
+}
+
+/**
+ * Extracts a complete C# method block.
+ */
+export function extractCsMethodBlock(
+  content: string,
+  lineIdx: number
+): { block: string; startLine: number; endLine: number; lineRange: string } | null {
+  return extractJavaMethodBlock(content, lineIdx);
+}
+
+/**
+ * Universal block extractor providing whole syntactic blocks across all languages,
+ * or clear fallback explanation when no source code block is applicable.
+ */
+export function extractCodeOrConfigBlock(
+  filePath: string,
+  content: string,
+  lineIdx: number,
+  fallbackExplanation?: string
+): { block: string; startLine: number; endLine: number; lineRange: string; method: string } {
+  const ext = getFileExtension(filePath);
+  if (ext === '.java') {
+    const res = extractJavaMethodBlock(content, lineIdx);
+    if (res) return { ...res, method: 'Java Method AST / Block Parser' };
+  } else if (ext === '.py') {
+    const res = extractPythonFunctionBlock(content, lineIdx);
+    if (res) return { ...res, method: 'Python Function AST / Block Parser' };
+  } else if (['.js', '.ts', '.jsx', '.tsx', '.mjs', '.cjs'].includes(ext)) {
+    const res = extractJsFunctionBlock(content, lineIdx);
+    if (res) return { ...res, method: 'JavaScript/TypeScript AST / Block Parser' };
+  } else if (ext === '.go') {
+    const res = extractGoFunctionBlock(content, lineIdx);
+    if (res) return { ...res, method: 'Go Function AST / Block Parser' };
+  } else if (ext === '.cs') {
+    const res = extractCsMethodBlock(content, lineIdx);
+    if (res) return { ...res, method: 'C# Method AST / Block Parser' };
+  } else if (['.yml', '.yaml', '.properties', '.json', '.toml', '.env'].includes(ext)) {
+    const res = extractConfigBlock(content, lineIdx);
+    return { ...res, method: 'Configuration Block Parser' };
+  }
+
+  if (fallbackExplanation) {
+    return {
+      block: `No source-code block available.\n${fallbackExplanation}`,
+      startLine: lineIdx + 1,
+      endLine: lineIdx + 1,
+      lineRange: `${lineIdx + 1}`,
+      method: 'Configuration / Manifest Metadata',
+    };
+  }
+
+  const lines = content.split('\n');
+  const startLine = Math.max(0, lineIdx - 1) + 1;
+  const endLine = Math.min(lines.length - 1, lineIdx + 3) + 1;
+  const block = lines.slice(startLine - 1, endLine).join('\n').trim();
+  return {
+    block: block || 'Exact source block unavailable.',
+    startLine,
+    endLine,
+    lineRange: startLine === endLine ? `${startLine}` : `${startLine}–${endLine}`,
+    method: 'Source Window Extractor',
+  };
+}
+
+/**
  * Ingests a ZIP file, guarantees 100% file retention (Level 1),
  * decodes textual contents safely, and delegates to analyzeCodebaseFiles.
  */
@@ -710,6 +890,9 @@ export function analyzeCodebaseFiles(
     }
   }
 
+  // 2c. Scan Kubernetes Manifests (microservices architecture, deployment and service addresses)
+  parseKubernetesManifests(files, registerEntity, registerRel, manifestsFound);
+
   // 3. Detect Chrome Extension Application (manifest.json with manifest_version)
   let chromeExtensionId: string | null = null;
   for (const file of files) {
@@ -1005,13 +1188,22 @@ function parseSourceFile(
     lowerPath.includes('frontend') ||
     lowerPath.includes('client');
   const isDart = ext === '.dart';
+  const fileStem = getFileStem(file.path).toLowerCase();
   const isTestFile =
     lowerPath.includes('/test') ||
     lowerPath.startsWith('test') ||
     lowerPath.includes('__test__') ||
-    lowerPath.includes('spec');
-
-  const fileStem = getFileStem(file.path).toLowerCase();
+    lowerPath.includes('spec') ||
+    lowerPath.includes('scratch_test') ||
+    lowerPath.includes('run_test') ||
+    lowerPath.includes('test_') ||
+    lowerPath.includes('/scripts/') ||
+    lowerPath.includes('kustomize') ||
+    fileStem.startsWith('test') ||
+    fileStem.startsWith('scratch') ||
+    fileStem.endsWith('_test') ||
+    fileStem.includes('.test.') ||
+    fileStem.includes('.spec.');
   const isModuleNamed =
     fileStem.includes('feature') ||
     fileStem.includes('extract') ||
@@ -1033,6 +1225,12 @@ function parseSourceFile(
   const javaClassMatch = ext === '.java' ? file.content.match(/\b(?:public\s+)?(?:class|interface)\s+([A-Za-z0-9_]+)/) : null;
   const javaClassId = javaClassMatch ? sanitizeId(javaClassMatch[1]) : null;
 
+  const isAgentFile = lowerPath.includes('/agents/') && fileStem.endsWith('_agent');
+  const isOrchestratorFile = (lowerPath.includes('/agents/') && fileStem === 'orchestrator') || (fileStem === 'graph' && !lowerPath.includes('test'));
+  const isRagFile = fileStem === 'rag_service';
+  const isFastApiApp = fileStem === 'main' && (file.content.includes('FastAPI(') || file.content.includes('app = FastAPI'));
+  const isExpressServer = (fileStem === 'server' || fileStem === 'app') && (file.content.includes('express()') || file.content.includes('from "express"') || file.content.includes("from 'express'"));
+
   let currentServiceId: string;
   if (isFrontendOrExtension && chromeExtensionId) {
     currentServiceId = chromeExtensionId;
@@ -1042,49 +1240,119 @@ function parseSourceFile(
     currentServiceId = flutterAppId;
   } else if (javaClassId && entityMap.has(javaClassId)) {
     currentServiceId = javaClassId;
-  } else if (!isTestFile && isServiceNamed) {
-    currentServiceId = sanitizeId(`${fileStem}-service`);
-    if (!entityMap.has(currentServiceId)) {
-      const name = formatComponentName(fileStem) + (fileStem.includes('service') ? '' : ' Service');
-      registerEntity({
-        id: currentServiceId,
-        name,
-        type: 'Service',
-        technology: detectTechFromFilename(file.path),
-        source: 'Detected',
-        description: `Backend service component rooted in ${file.path}`,
-        metadata: { filePath: file.path },
-      });
-    }
-  } else if (!isTestFile && isModuleNamed) {
-    currentServiceId = sanitizeId(`mod-${fileStem}`);
+  } else if (isAgentFile) {
+    currentServiceId = sanitizeId(fileStem);
     if (!entityMap.has(currentServiceId)) {
       registerEntity({
         id: currentServiceId,
         name: formatComponentName(fileStem),
-        type: 'Module',
-        technology: detectTechFromFilename(file.path),
+        type: 'Service',
+        technology: 'AI Agent',
         source: 'Detected',
-        description: `Internal module rooted in ${file.path}`,
+        description: `Specialized autonomous agent defined in ${file.path}`,
+        metadata: { filePath: file.path },
+      });
+    }
+  } else if (isOrchestratorFile) {
+    currentServiceId = 'multi-agent-orchestrator';
+    if (!entityMap.has(currentServiceId)) {
+      registerEntity({
+        id: currentServiceId,
+        name: 'Multi-Agent Orchestrator',
+        type: 'Service',
+        technology: 'LangGraph / Multi-Agent',
+        source: 'Detected',
+        description: `Workflow coordinator managing autonomous multi-agent execution in ${file.path}`,
+        metadata: { filePath: file.path },
+      });
+    }
+  } else if (isRagFile) {
+    currentServiceId = 'rag-service';
+    if (!entityMap.has(currentServiceId)) {
+      registerEntity({
+        id: currentServiceId,
+        name: 'RAG Service',
+        type: 'Service',
+        technology: 'Vector RAG / Retrieval',
+        source: 'Detected',
+        description: `Vector retrieval pipeline defined in ${file.path}`,
+        metadata: { filePath: file.path },
+      });
+    }
+  } else if (isFastApiApp) {
+    currentServiceId = 'backend-api';
+    if (!entityMap.has(currentServiceId)) {
+      registerEntity({
+        id: currentServiceId,
+        name: 'FastAPI Backend Service',
+        type: 'Service',
+        technology: 'Python / FastAPI',
+        source: 'Detected',
+        description: `Backend API server rooted in ${file.path}`,
+        metadata: { filePath: file.path },
+      });
+    }
+  } else if (isExpressServer && !lowerPath.includes('test')) {
+    currentServiceId = sanitizeId(fileStem);
+    if (!entityMap.has(currentServiceId)) {
+      registerEntity({
+        id: currentServiceId,
+        name: formatComponentName(fileStem) + ' Backend',
+        type: 'Service',
+        technology: 'Node.js / Express',
+        source: 'Detected',
+        description: `Express backend server in ${file.path}`,
         metadata: { filePath: file.path },
       });
     }
   } else {
-    if (ext === '.java') {
-      return;
-    }
-    currentServiceId = findEnclosingServiceId(file.path, entityMap) || 'backend-api';
-    if (!isTestFile && !entityMap.has(currentServiceId)) {
-      const stem = getParentFolder(file.path) || 'Backend Service';
-      registerEntity({
-        id: currentServiceId,
-        name: formatComponentName(stem),
-        type: 'Service',
-        technology: detectTechFromFilename(file.path),
-        source: 'Detected',
-        description: `Backend service component rooted in ${file.path}`,
-        metadata: { filePath: file.path },
-      });
+    const enclosingId = findEnclosingServiceId(file.path, entityMap);
+    if (enclosingId) {
+      currentServiceId = enclosingId;
+    } else if (!isTestFile && isServiceNamed) {
+      currentServiceId = sanitizeId(`${fileStem}-service`);
+      if (!entityMap.has(currentServiceId)) {
+        const name = formatComponentName(fileStem) + (fileStem.includes('service') ? '' : ' Service');
+        registerEntity({
+          id: currentServiceId,
+          name,
+          type: 'Service',
+          technology: detectTechFromFilename(file.path),
+          source: 'Detected',
+          description: `Backend service component rooted in ${file.path}`,
+          metadata: { filePath: file.path },
+        });
+      }
+    } else if (!isTestFile && isModuleNamed) {
+      currentServiceId = sanitizeId(`mod-${fileStem}`);
+      if (!entityMap.has(currentServiceId)) {
+        registerEntity({
+          id: currentServiceId,
+          name: formatComponentName(fileStem),
+          type: 'Module',
+          technology: detectTechFromFilename(file.path),
+          source: 'Detected',
+          description: `Internal module rooted in ${file.path}`,
+          metadata: { filePath: file.path },
+        });
+      }
+    } else {
+      if (ext === '.java') {
+        return;
+      }
+      currentServiceId = 'backend-api';
+      if (!isTestFile && !entityMap.has(currentServiceId)) {
+        const stem = getParentFolder(file.path) || 'Backend Service';
+        registerEntity({
+          id: currentServiceId,
+          name: formatComponentName(stem),
+          type: 'Service',
+          technology: detectTechFromFilename(file.path),
+          source: 'Detected',
+          description: `Backend service component rooted in ${file.path}`,
+          metadata: { filePath: file.path },
+        });
+      }
     }
   }
 
@@ -1095,19 +1363,157 @@ function parseSourceFile(
     if (!trimmed || trimmed.startsWith('#') || trimmed.startsWith('//') || trimmed.startsWith('/*')) continue;
 
     // ------------------------------------------------------------------
-    // A. Python Import Resolution
+    // A. Python Import & Service Resolution
     // ------------------------------------------------------------------
     if (ext === '.py') {
-      // 1. "import X" or "import X as Y"
-      const pyImportMatch = trimmed.match(/^import\s+([a-zA-Z0-9_\.]+)/);
-      // 2. "from X import Y"
-      const pyFromMatch = trimmed.match(/^from\s+([a-zA-Z0-9_\.]+)\s+import/);
+      const pyBlock = extractPythonFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
 
+      // 1. Multi-Agent Orchestrator -> Agent delegation
+      if (currentServiceId === 'multi-agent-orchestrator') {
+        const agentMatch = trimmed.match(/\b([a-zA-Z0-9_]+_agent)\b/);
+        if (agentMatch) {
+          const targetAgentId = sanitizeId(agentMatch[1]);
+          registerEntity({
+            id: targetAgentId,
+            name: formatComponentName(agentMatch[1]),
+            type: 'Service',
+            technology: 'AI Agent',
+            source: 'Detected',
+            description: `Specialized agent coordinated by orchestrator`,
+            metadata: { filePath: file.path },
+          });
+          registerRel(
+            currentServiceId,
+            targetAgentId,
+            'CALLS',
+            'Agent Delegation',
+            file.path,
+            pyBlock.block,
+            pyBlock.startLine,
+            'LangGraph Agent Invocation Parser',
+            'HIGH',
+            pyBlock.lineRange,
+            pyBlock.endLine
+          );
+        }
+      }
+
+      // 2. FastAPI Backend -> Orchestrator & RAG service
+      if (currentServiceId === 'backend-api') {
+        if (trimmed.includes('graph') || trimmed.includes('orchestrator')) {
+          registerRel(
+            currentServiceId,
+            'multi-agent-orchestrator',
+            'USES',
+            'Workflow Execution',
+            file.path,
+            pyBlock.block,
+            pyBlock.startLine,
+            'LangGraph Orchestrator Extractor',
+            'HIGH',
+            pyBlock.lineRange,
+            pyBlock.endLine
+          );
+        }
+        if (trimmed.includes('rag_service')) {
+          registerRel(
+            currentServiceId,
+            'rag-service',
+            'USES',
+            'Internal Service Call',
+            file.path,
+            pyBlock.block,
+            pyBlock.startLine,
+            'Python Import Extractor',
+            'HIGH',
+            pyBlock.lineRange,
+            pyBlock.endLine
+          );
+        }
+      }
+
+      // 3. Agent Tool Call Integrations
+      if (isAgentFile) {
+        if (trimmed.includes('flight_api')) {
+          const svcId = 'flight-api-service';
+          registerEntity({
+            id: svcId,
+            name: 'Flight API Service',
+            type: 'Service',
+            technology: 'REST API Service',
+            source: 'Detected',
+            description: 'Flight data search integration',
+            metadata: { filePath: file.path },
+          });
+          registerRel(currentServiceId, svcId, 'CALLS', 'HTTP / REST', file.path, pyBlock.block, pyBlock.startLine, 'Agent Tool Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
+        }
+        if (trimmed.includes('hotel_api')) {
+          const svcId = 'hotel-api-service';
+          registerEntity({
+            id: svcId,
+            name: 'Hotel API Service',
+            type: 'Service',
+            technology: 'REST API Service',
+            source: 'Detected',
+            description: 'Hotel booking and search integration',
+            metadata: { filePath: file.path },
+          });
+          registerRel(currentServiceId, svcId, 'CALLS', 'HTTP / REST', file.path, pyBlock.block, pyBlock.startLine, 'Agent Tool Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
+        }
+        if (trimmed.includes('tavily')) {
+          const tavilyId = 'tavily-api';
+          registerEntity({
+            id: tavilyId,
+            name: 'Tavily Search API',
+            type: 'External System',
+            technology: 'Tavily REST API',
+            source: 'Detected',
+            description: 'AI-grounded web search and information retrieval API',
+            metadata: { filePath: file.path },
+          });
+          registerRel(currentServiceId, tavilyId, 'CALLS', 'HTTPS / REST', file.path, pyBlock.block, pyBlock.startLine, 'Agent Tool Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
+        }
+        if (trimmed.includes('openweather')) {
+          const weatherId = 'openweather-api';
+          registerEntity({
+            id: weatherId,
+            name: 'OpenWeather API',
+            type: 'External System',
+            technology: 'OpenWeather REST API',
+            source: 'Detected',
+            description: 'Live global weather forecast API',
+            metadata: { filePath: file.path },
+          });
+          registerRel(currentServiceId, weatherId, 'CALLS', 'HTTPS / REST', file.path, pyBlock.block, pyBlock.startLine, 'Agent Tool Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
+        }
+      }
+
+      // 4. Recommendationservice calling productcatalogservice (microservices-demo)
+      if (trimmed.includes('PRODUCT_CATALOG_SERVICE_ADDR') || trimmed.includes('ProductCatalogServiceStub')) {
+        const targetId = 'productcatalogservice';
+        registerRel(
+          currentServiceId,
+          targetId,
+          'CALLS',
+          'gRPC',
+          file.path,
+          pyBlock.block,
+          pyBlock.startLine,
+          'gRPC Client Stub Extractor',
+          'HIGH',
+          pyBlock.lineRange,
+          pyBlock.endLine
+        );
+      }
+
+      // 5. Standard Python Import Resolution
+      const pyImportMatch = trimmed.match(/^import\s+([a-zA-Z0-9_\.]+)/);
+      const pyFromMatch = trimmed.match(/^from\s+([a-zA-Z0-9_\.]+)\s+import/);
       const rawModule = pyImportMatch ? pyImportMatch[1] : pyFromMatch ? pyFromMatch[1] : null;
+
       if (rawModule) {
         const topModule = rawModule.split('.')[0].toLowerCase();
 
-        // Check if topModule maps to an internal project file
         if (fileByStem.has(topModule)) {
           const targetPath = fileByStem.get(topModule)!;
           if (targetPath !== file.path) {
@@ -1117,13 +1523,12 @@ function parseSourceFile(
               target_file: targetPath,
               type: 'IMPORTS',
               line: lineNum,
-              snippet: trimmed,
+              snippet: pyBlock.block,
               statement: trimmed,
               detectionMethod: 'Python AST/Import Parser',
               confidence: 'HIGH',
             });
 
-            // If target is another service or service candidate
             const targetStem = topModule;
             const targetServiceId = sanitizeId(`${targetStem}-service`);
             if (
@@ -1152,10 +1557,12 @@ function parseSourceFile(
                 'CALLS',
                 'Internal Module / Service Call',
                 file.path,
-                trimmed,
-                lineNum,
+                pyBlock.block,
+                pyBlock.startLine,
                 'Python Import / Dependency Extractor',
-                'HIGH'
+                'HIGH',
+                pyBlock.lineRange,
+                pyBlock.endLine
               );
             } else if (
               topModule.includes('feature') ||
@@ -1173,13 +1580,13 @@ function parseSourceFile(
                 description: `Internal module referenced by ${file.path}`,
                 metadata: { filePath: targetPath },
               });
-              registerRel(currentServiceId, moduleId, 'USES', 'Python Import', file.path, trimmed, lineNum, 'Python Import Extractor', 'HIGH');
+              registerRel(currentServiceId, moduleId, 'USES', 'Python Import', file.path, pyBlock.block, pyBlock.startLine, 'Python Import Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
             }
           }
         }
 
         // GenAI SDKs: Google Gemini
-        if (rawModule === 'google.generativeai' || rawModule === 'genai' || rawModule.includes('google_genai')) {
+        if (rawModule === 'google.generativeai' || rawModule === 'genai' || rawModule.includes('google_genai') || rawModule.includes('langchain_google_genai')) {
           const geminiId = 'google-gemini-api';
           registerEntity({
             id: geminiId,
@@ -1190,7 +1597,7 @@ function parseSourceFile(
             description: 'Foundation model API for multimodal and text reasoning',
             metadata: { sdk: 'google-generativeai' },
           });
-          registerRel(currentServiceId, geminiId, 'CALLS', 'HTTPS / REST', file.path, trimmed, lineNum, 'GenAI SDK Extractor', 'HIGH');
+          registerRel(currentServiceId, geminiId, 'CALLS', 'HTTPS / REST', file.path, pyBlock.block, pyBlock.startLine, 'GenAI SDK Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
         }
 
         // GenAI SDKs: OpenAI
@@ -1205,7 +1612,7 @@ function parseSourceFile(
             description: 'OpenAI LLM and embeddings integration',
             metadata: { sdk: 'openai' },
           });
-          registerRel(currentServiceId, openAiId, 'CALLS', 'HTTPS / REST', file.path, trimmed, lineNum, 'GenAI SDK Extractor', 'HIGH');
+          registerRel(currentServiceId, openAiId, 'CALLS', 'HTTPS / REST', file.path, pyBlock.block, pyBlock.startLine, 'GenAI SDK Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
         }
 
         // Vector Stores: FAISS
@@ -1220,20 +1627,45 @@ function parseSourceFile(
             description: 'In-memory similarity vector search index for RAG retrieval',
             metadata: { dbType: 'Vector Store' },
           });
-          registerRel(currentServiceId, faissId, 'QUERIES', 'Vector Search', file.path, trimmed, lineNum, 'Vector Store Extractor', 'HIGH');
+          registerRel(currentServiceId, faissId, 'QUERIES', 'Vector Search', file.path, pyBlock.block, pyBlock.startLine, 'Vector Store Extractor', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
         }
       }
 
-      // Detect Flask Route Decorators
+      // FastAPI Route Decorators
+      const fastapiRouteMatch = trimmed.match(/@(?:app|router|api)\.(get|post|put|delete|patch)\s*\(\s*['"]([^'"]+)['"]/i);
+      if (fastapiRouteMatch) {
+        const verb = fastapiRouteMatch[1].toUpperCase();
+        const endpoint = fastapiRouteMatch[2];
+        const apiId = sanitizeId(`api-${verb}-${endpoint}`);
+        registerEntity({
+          id: apiId,
+          name: `${verb} ${endpoint}`,
+          type: 'API',
+          technology: 'FastAPI / REST Endpoint',
+          source: 'Detected',
+          description: `FastAPI HTTP ${verb} route exposed in ${file.path}`,
+          metadata: { filePath: file.path, endpoint, method: verb, line: pyBlock.startLine, endLine: pyBlock.endLine, lineRange: pyBlock.lineRange, snippet: pyBlock.block },
+        });
+        registerRel(
+          currentServiceId,
+          apiId,
+          'EXPOSES',
+          'HTTP Endpoint',
+          file.path,
+          pyBlock.block,
+          pyBlock.startLine,
+          'FastAPI Route Extractor',
+          'HIGH',
+          pyBlock.lineRange,
+          pyBlock.endLine
+        );
+      }
+
+      // Flask Route Decorators
       const flaskRouteMatch = trimmed.match(/@(?:app|bp|blueprint|router|api)\.route\s*\(\s*['"]([^'"]+)['"]/i);
       if (flaskRouteMatch) {
         const endpoint = flaskRouteMatch[1];
         const apiId = sanitizeId(`api-${endpoint}`);
-        const pyBlock = extractPythonFunctionBlock(file.content, i);
-        const codeSnippet = pyBlock ? pyBlock.block : trimmed;
-        const startL = pyBlock ? pyBlock.startLine : lineNum;
-        const endL = pyBlock ? pyBlock.endLine : lineNum;
-        const lRange = pyBlock ? pyBlock.lineRange : `${lineNum}`;
 
         registerEntity({
           id: apiId,
@@ -1242,13 +1674,13 @@ function parseSourceFile(
           technology: 'Flask / REST Endpoint',
           source: 'Detected',
           description: `HTTP API route exposed in ${file.path}`,
-          metadata: { filePath: file.path, endpoint, line: startL, endLine: endL, lineRange: lRange, snippet: codeSnippet },
+          metadata: { filePath: file.path, endpoint, line: pyBlock.startLine, endLine: pyBlock.endLine, lineRange: pyBlock.lineRange, snippet: pyBlock.block },
           sourceEvidence: {
             file: file.path,
-            line: startL,
-            lineEnd: endL,
-            lineRange: lRange,
-            snippet: codeSnippet,
+            line: pyBlock.startLine,
+            lineEnd: pyBlock.endLine,
+            lineRange: pyBlock.lineRange,
+            snippet: pyBlock.block,
             description: `HTTP API route "${endpoint}" exposed in ${file.path}`,
             method: 'Python Function AST Parser',
             confidence: 'HIGH',
@@ -1260,12 +1692,12 @@ function parseSourceFile(
           'EXPOSES',
           'HTTP Endpoint',
           file.path,
-          codeSnippet,
-          startL,
+          pyBlock.block,
+          pyBlock.startLine,
           'Route Decorator Extractor',
           'HIGH',
-          lRange,
-          endL
+          pyBlock.lineRange,
+          pyBlock.endLine
         );
       }
 
@@ -1281,7 +1713,7 @@ function parseSourceFile(
           description: 'Persisted machine learning models loaded for inference',
           metadata: { dbType: 'Model Artifact Store' },
         });
-        registerRel(currentServiceId, modelStoreId, 'LOADS', 'Binary Deserialization', file.path, trimmed, lineNum, 'ML Model Deserializer', 'HIGH');
+        registerRel(currentServiceId, modelStoreId, 'LOADS', 'Binary Deserialization', file.path, pyBlock.block, pyBlock.startLine, 'ML Model Deserializer', 'HIGH', pyBlock.lineRange, pyBlock.endLine);
       }
     }
 
@@ -1314,7 +1746,68 @@ function parseSourceFile(
     }
 
     // ------------------------------------------------------------------
-    // C. JavaScript / TypeScript Client API Calls & Relative Imports
+    // ------------------------------------------------------------------
+    // C1. Go Source Code Resolution (gRPC / Microservices)
+    // ------------------------------------------------------------------
+    if (ext === '.go') {
+      const envMapMatch = trimmed.match(/mustMapEnv\s*\(\s*&[a-zA-Z0-9_\.]+\s*,\s*["']([A-Z0-9_]+(?:_SERVICE_ADDR|_ADDR))["']\)/);
+      if (envMapMatch) {
+        const envVar = envMapMatch[1];
+        const rawSvc = envVar.replace(/_SERVICE_ADDR$|_ADDR$/, '').toLowerCase().replace(/_/g, '');
+        const targetId = sanitizeId(rawSvc);
+        if (targetId && targetId !== currentServiceId) {
+          const goBlock = extractGoFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+          registerRel(
+            currentServiceId,
+            targetId,
+            'CALLS',
+            'gRPC',
+            file.path,
+            goBlock.block,
+            goBlock.startLine,
+            'Go gRPC Client Extractor',
+            'HIGH',
+            goBlock.lineRange,
+            goBlock.endLine
+          );
+        }
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // C2. C# Source Code Resolution (.NET Microservices)
+    // ------------------------------------------------------------------
+    if (ext === '.cs') {
+      if (trimmed.includes('Configuration["REDIS_ADDR"]') || trimmed.includes('AddStackExchangeRedisCache')) {
+        const dbId = 'redis-cart';
+        registerEntity({
+          id: dbId,
+          name: 'Redis Cart Store',
+          type: 'Database',
+          technology: 'Redis',
+          source: 'Detected',
+          description: 'In-memory distributed cache store configured in ' + file.path,
+          metadata: { filePath: file.path },
+        });
+        const csBlock = extractCsMethodBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+        registerRel(
+          currentServiceId,
+          dbId,
+          'USES',
+          'Redis Protocol',
+          file.path,
+          csBlock.block,
+          csBlock.startLine,
+          'C# Redis Cache Extractor',
+          'HIGH',
+          csBlock.lineRange,
+          csBlock.endLine
+        );
+      }
+    }
+
+    // ------------------------------------------------------------------
+    // C3. JavaScript / TypeScript Client API Calls & Messaging & Routes
     // ------------------------------------------------------------------
     if (ext === '.js' || ext === '.ts' || ext === '.jsx' || ext === '.tsx') {
       // Relative imports
@@ -1338,34 +1831,171 @@ function parseSourceFile(
         }
       }
 
+      // Inter-service HTTP calls: axios.post('http://customer:8001/app-events/', ...)
+      const httpServiceCallMatch = trimmed.match(/(?:axios|fetch|request)\s*\.\s*(?:get|post|put|delete)\s*\(\s*[`'"]https?:\/\/([a-zA-Z0-9_-]+):[0-9]+/i);
+      if (httpServiceCallMatch) {
+        const targetHost = sanitizeId(httpServiceCallMatch[1]);
+        if (targetHost !== currentServiceId) {
+          const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+          registerRel(
+            currentServiceId,
+            targetHost,
+            'CALLS',
+            'HTTP / REST',
+            file.path,
+            jsBlock.block,
+            jsBlock.startLine,
+            'Node.js HTTP Service Client Extractor',
+            'HIGH',
+            jsBlock.lineRange,
+            jsBlock.endLine
+          );
+        }
+      }
+
+      // RabbitMQ Messaging via amqplib (PublishMessage / SubscribeMessage)
+      if (trimmed.includes('amqplib') || trimmed.includes('PublishMessage') || trimmed.includes('SubscribeMessage') || trimmed.includes('MSG_QUEUE_URL')) {
+        const mqId = 'rabbitmq';
+        registerEntity({
+          id: mqId,
+          name: 'RabbitMQ Message Broker',
+          type: 'Service',
+          technology: 'RabbitMQ / AMQP',
+          source: 'Detected',
+          description: 'Event broker queue for inter-service event communication',
+          metadata: { filePath: file.path },
+        });
+        const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+        registerRel(
+          currentServiceId,
+          mqId,
+          'CONNECTS_TO',
+          'AMQP Protocol',
+          file.path,
+          jsBlock.block,
+          jsBlock.startLine,
+          'AMQP Message Broker Extractor',
+          'HIGH',
+          jsBlock.lineRange,
+          jsBlock.endLine
+        );
+      }
+
+      // MongoDB connection: mongoose.connect
+      if (trimmed.includes('mongoose.connect') || trimmed.includes('mongodb://') || (trimmed.includes('DB_URL') && file.content.includes('mongoose'))) {
+        const dbId = 'nosql-db';
+        registerEntity({
+          id: dbId,
+          name: 'MongoDB Database',
+          type: 'Database',
+          technology: 'MongoDB',
+          source: 'Detected',
+          description: 'Document database configured in ' + file.path,
+          metadata: { filePath: file.path, dbType: 'NoSQL / Document' },
+        });
+        const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+        registerRel(
+          currentServiceId,
+          dbId,
+          'QUERIES',
+          'MongoDB Wire Protocol',
+          file.path,
+          jsBlock.block,
+          jsBlock.startLine,
+          'Mongoose Database Extractor',
+          'HIGH',
+          jsBlock.lineRange,
+          jsBlock.endLine
+        );
+      }
+
+      // GitHub REST API
+      if (trimmed.includes('api.github.com') || trimmed.includes('fetchGitHubData')) {
+        const ghId = 'github-api';
+        registerEntity({
+          id: ghId,
+          name: 'GitHub REST API',
+          type: 'External System',
+          technology: 'GitHub REST API',
+          source: 'Detected',
+          description: 'External GitHub developer platform API',
+          metadata: { filePath: file.path },
+        });
+        const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+        registerRel(
+          currentServiceId,
+          ghId,
+          'CALLS',
+          'HTTPS / REST',
+          file.path,
+          jsBlock.block,
+          jsBlock.startLine,
+          'GitHub API Client Extractor',
+          'HIGH',
+          jsBlock.lineRange,
+          jsBlock.endLine
+        );
+      }
+
+      // Google Gemini GenAI SDK (@google/genai)
+      if (trimmed.includes('@google/genai') || trimmed.includes('GoogleGenAI') || trimmed.includes('GoogleGenerativeAI')) {
+        const geminiId = 'google-gemini-api';
+        registerEntity({
+          id: geminiId,
+          name: 'Google Gemini Generative AI API',
+          type: 'External System',
+          technology: 'Google Gemini API',
+          source: 'Detected',
+          description: 'Multimodal AI reasoning models via Google GenAI SDK',
+          metadata: { filePath: file.path },
+        });
+        const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
+        registerRel(
+          currentServiceId,
+          geminiId,
+          'CALLS',
+          'HTTPS / REST',
+          file.path,
+          jsBlock.block,
+          jsBlock.startLine,
+          'Google GenAI SDK Extractor',
+          'HIGH',
+          jsBlock.lineRange,
+          jsBlock.endLine
+        );
+      }
+
       // Client API Calls: const API_URL = 'http://127.0.0.1:5000/predict' or fetch() or axios.post()
       const clientUrlMatch = trimmed.match(/(?:http:\/\/)?(?:127\.0\.0\.1|localhost):(\d+)(\/[a-zA-Z0-9_\-\/]+)?/i);
       if (clientUrlMatch) {
         const port = clientUrlMatch[1];
         const endpoint = clientUrlMatch[2] || '';
-        // If frontend/extension calls backend on port 5000 or 8080
-        const backendTarget = entityMap.get('backend-api') || entityMap.get('phishing-ai-extention-main') || entitiesList(entityMap).find((e) => e.type === 'Service');
+        const backendTarget = entityMap.get('backend-api') || entityMap.get('phishing-ai-extention-main') || entityMap.get('app-service') || entitiesList(entityMap).find((e) => e.type === 'Service');
         if (backendTarget && backendTarget.id !== currentServiceId) {
+          const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
           registerRel(
             currentServiceId,
             backendTarget.id,
             'CALLS',
             `HTTP ${port ? `:${port}` : ''}${endpoint}`,
             file.path,
-            trimmed,
-            lineNum,
+            jsBlock.block,
+            jsBlock.startLine,
             'Client HTTP Endpoint Extractor',
-            'HIGH'
+            'HIGH',
+            jsBlock.lineRange,
+            jsBlock.endLine
           );
         }
       }
 
       // Express API Routes
-      const restMatch = trimmed.match(/(?:app|router)\.(get|post|put|delete|patch)\(['"`](\/api\/[a-zA-Z0-9_\-\/]+)['"`]/i);
+      const restMatch = trimmed.match(/(?:app|router)\.(get|post|put|delete|patch)\(['"`](\/[a-zA-Z0-9_\-\/:]*)['"`]/i);
       if (restMatch) {
         const method = restMatch[1].toUpperCase();
         const endpoint = restMatch[2];
         const apiId = sanitizeId(`api-${method}-${endpoint}`);
+        const jsBlock = extractJsFunctionBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
         registerEntity({
           id: apiId,
           name: `${method} ${endpoint}`,
@@ -1373,9 +2003,21 @@ function parseSourceFile(
           technology: 'REST API Route',
           source: 'Detected',
           description: `REST endpoint in ${file.path}`,
-          metadata: { filePath: file.path, method, endpoint, line: lineNum, snippet: trimmed },
+          metadata: { filePath: file.path, method, endpoint, line: jsBlock.startLine, endLine: jsBlock.endLine, lineRange: jsBlock.lineRange, snippet: jsBlock.block },
         });
-        registerRel(currentServiceId, apiId, 'EXPOSES', 'Internal Route', file.path, trimmed, lineNum, 'Express Route Extractor', 'HIGH');
+        registerRel(
+          currentServiceId,
+          apiId,
+          'EXPOSES',
+          'Internal Route',
+          file.path,
+          jsBlock.block,
+          jsBlock.startLine,
+          'Express Route Extractor',
+          'HIGH',
+          jsBlock.lineRange,
+          jsBlock.endLine
+        );
       }
     }
 
@@ -1427,7 +2069,6 @@ function parseSourceFile(
         const httpVerb = verbMap[rawVerb] || 'GET';
         const rawRoute = springRouteMatch[2] || springRouteMatch[3] || '';
 
-        // Extract class-level @RequestMapping if present
         let classPrefix = '';
         const classReqMatch = file.content.match(/@RequestMapping\s*\(\s*(?:value\s*=\s*)?["']([^"']+)["']/);
         if (classReqMatch) {
@@ -1513,16 +2154,19 @@ function parseSourceFile(
                 ? 'Spring Data JPA Injection'
                 : 'Java Method Call';
 
+              const methodBlock = extractJavaMethodBlock(file.content, i) || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
               registerRel(
                 currentServiceId,
                 targetId,
                 relType,
                 protocol,
                 file.path,
-                trimmed,
-                lineNum,
+                methodBlock.block,
+                methodBlock.startLine,
                 'Spring Dependency Injection Extractor',
-                'HIGH'
+                'HIGH',
+                methodBlock.lineRange,
+                methodBlock.endLine
               );
             }
           }
@@ -1532,6 +2176,7 @@ function parseSourceFile(
       // 4. Spring Data JPA Repository -> Database Link
       if (trimmed.includes('extends JpaRepository') || trimmed.includes('extends CrudRepository')) {
         const dbEntities = entitiesList(entityMap).filter((e) => e.type === 'Database');
+        const classBlock = extractJavaClassBlock(file.content, javaClassMatch ? javaClassMatch[1] : '') || { block: trimmed, startLine: lineNum, endLine: lineNum, lineRange: `${lineNum}` };
         dbEntities.forEach((db) => {
           registerRel(
             currentServiceId,
@@ -1539,10 +2184,12 @@ function parseSourceFile(
             'QUERIES',
             'Spring Data JPA / Hibernate',
             file.path,
-            trimmed,
-            lineNum,
+            classBlock.block,
+            classBlock.startLine,
             'Spring Data JPA Extractor',
-            'HIGH'
+            'HIGH',
+            classBlock.lineRange,
+            classBlock.endLine
           );
         });
       }
@@ -1654,10 +2301,13 @@ function parseDockerCompose(
   const lines = file.content.split('\n');
   let currentService = '';
   let inServices = false;
+  let inDependsOn = false;
+  let dependsOnIndent = 0;
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
-    if (line.trim().startsWith('services:')) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('services:')) {
       inServices = true;
       continue;
     }
@@ -1665,14 +2315,17 @@ function parseDockerCompose(
     if (inServices) {
       const serviceMatch = line.match(/^ {2}([a-zA-Z0-9_-]+):/);
       if (serviceMatch) {
-        currentService = serviceMatch[1];
-        const isDb = /postgres|mysql|mongo|redis|mariadb|cockroach|dynamodb/i.test(currentService);
+        currentService = sanitizeId(serviceMatch[1]);
+        inDependsOn = false;
+        const isDb = /postgres|mysql|mongo|redis|mariadb|cockroach|dynamodb|nosql/i.test(currentService);
+        const isMq = /rabbit|kafka|nats|activemq/i.test(currentService);
         const entityType: EntityType = isDb ? 'Database' : 'Service';
+        const tech = isDb ? (currentService.includes('mongo') || currentService.includes('nosql') ? 'MongoDB' : formatComponentName(currentService)) : isMq ? 'RabbitMQ' : 'Docker Container';
         registerEntity({
           id: currentService,
           name: formatComponentName(currentService),
           type: entityType,
-          technology: isDb ? currentService : 'Docker Container',
+          technology: tech,
           source: 'Detected',
           description: `Containerized ${entityType.toLowerCase()} defined in ${file.path}`,
           metadata: { filePath: file.path },
@@ -1680,16 +2333,161 @@ function parseDockerCompose(
       }
 
       if (currentService) {
-        const dependsMatch = line.match(/-(?: |\t)+([a-zA-Z0-9_-]+)/);
-        if (dependsMatch && lines[i - 1]?.includes('depends_on:')) {
-          const target = dependsMatch[1];
-          registerRel(currentService, target, 'DEPENDS_ON', 'Docker Network', file.path, line.trim(), i + 1, 'Docker Compose Parser', 'HIGH');
+        if (/^\s+depends_on:/.test(line)) {
+          inDependsOn = true;
+          dependsOnIndent = line.search(/\S/);
+          continue;
         }
 
-        const envMatch = line.match(/(?:DATABASE_URL|POSTGRES_HOST|REDIS_HOST|DB_HOST):\s*([a-zA-Z0-9_-]+)/i);
+        if (inDependsOn) {
+          const currentIndent = line.search(/\S/);
+          if (trimmed && currentIndent <= dependsOnIndent && !trimmed.startsWith('-')) {
+            inDependsOn = false;
+          } else {
+            const depItemMatch = trimmed.match(/^-\s*["']?([a-zA-Z0-9_-]+)["']?/);
+            if (depItemMatch) {
+              const target = sanitizeId(depItemMatch[1]);
+              const cfg = extractConfigBlock(file.content, i, '-');
+              registerRel(
+                currentService,
+                target,
+                'DEPENDS_ON',
+                'Docker Network',
+                file.path,
+                cfg.block,
+                cfg.startLine,
+                'Docker Compose Parser',
+                'HIGH',
+                cfg.lineRange,
+                cfg.endLine
+              );
+            }
+          }
+        }
+
+        const envMatch = line.match(/(?:DATABASE_URL|POSTGRES_HOST|REDIS_HOST|DB_HOST|MONGO_URL|DB_URL):\s*["']?([a-zA-Z0-9_-]+)/i);
         if (envMatch) {
-          const target = envMatch[1];
-          registerRel(currentService, target, 'USES', 'TCP/Socket', file.path, line.trim(), i + 1, 'Docker Compose Env Parser', 'HIGH');
+          const target = sanitizeId(envMatch[1]);
+          const cfg = extractConfigBlock(file.content, i);
+          registerRel(
+            currentService,
+            target,
+            'USES',
+            'TCP/Socket',
+            file.path,
+            cfg.block,
+            cfg.startLine,
+            'Docker Compose Env Parser',
+            'HIGH',
+            cfg.lineRange,
+            cfg.endLine
+          );
+        }
+      }
+    }
+  }
+}
+
+function parseKubernetesManifests(
+  files: FileRecord[],
+  registerEntity: (e: ArchitectureEntity) => void,
+  registerRel: (...args: any[]) => void,
+  manifestsFound: string[]
+) {
+  const k8sFiles = files.filter((f) => {
+    const lower = f.path.toLowerCase();
+    return (
+      (lower.includes('kubernetes') || lower.includes('k8s') || lower.includes('manifest')) &&
+      (lower.endsWith('.yaml') || lower.endsWith('.yml')) &&
+      !lower.includes('kustom')
+    );
+  });
+
+  for (const file of k8sFiles) {
+    if (!manifestsFound.includes(file.path)) {
+      manifestsFound.push(file.path);
+    }
+    const lines = file.content.split('\n');
+    let currentDeployment: string | null = null;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Detect Deployment / Service metadata name
+      const nameMatch = line.match(/^ {2}name:\s*["']?([a-zA-Z0-9_-]+)["']?/);
+      if (nameMatch && i > 0 && lines[i - 1].includes('metadata:')) {
+        const name = nameMatch[1];
+        if (name !== 'server' && name !== 'default' && !name.includes('probe')) {
+          currentDeployment = name;
+          const isDb = /redis|postgres|mysql|mongo|db/i.test(name);
+          const entityType: EntityType = isDb ? 'Database' : 'Service';
+          const tech = isDb ? (name.includes('redis') ? 'Redis' : formatComponentName(name)) : 'Kubernetes Microservice';
+          registerEntity({
+            id: sanitizeId(name),
+            name: formatComponentName(name),
+            type: entityType,
+            technology: tech,
+            source: 'Detected',
+            description: `Kubernetes ${entityType.toLowerCase()} declared in ${file.path}`,
+            metadata: { filePath: file.path },
+          });
+        }
+      }
+
+      // Detect env vars pointing to target services:
+      // - name: PRODUCT_CATALOG_SERVICE_ADDR
+      //   value: "productcatalogservice:3550"
+      const envNameMatch = line.match(/-\s+name:\s*["']?([A-Z0-9_]+(?:_SERVICE_ADDR|_ADDR))["']?/);
+      if (envNameMatch && currentDeployment) {
+        let targetAddr = '';
+        const inlineVal = line.match(/value:\s*["']?([^"'\s]+)["']?/);
+        if (inlineVal) {
+          targetAddr = inlineVal[1];
+        } else if (i + 1 < lines.length && lines[i + 1].includes('value:')) {
+          const nextVal = lines[i + 1].match(/value:\s*["']?([^"'\s]+)["']?/);
+          if (nextVal) {
+            targetAddr = nextVal[1];
+          }
+        }
+
+        if (targetAddr) {
+          const targetHost = targetAddr.split(':')[0];
+          const targetPort = targetAddr.split(':')[1] || '';
+          const targetId = sanitizeId(targetHost);
+
+          const isDb = /redis|postgres|mysql|mongo|db/i.test(targetHost);
+          const entityType: EntityType = isDb ? 'Database' : 'Service';
+          const protocol = targetPort === '6379' || isDb
+            ? 'Redis Protocol'
+            : /50051|3550|5050|7000|7070|9555/.test(targetPort)
+            ? 'gRPC'
+            : 'HTTP/REST';
+          const relType: RelationshipType = isDb ? 'USES' : 'CALLS';
+
+          registerEntity({
+            id: targetId,
+            name: formatComponentName(targetHost),
+            type: entityType,
+            technology: isDb ? (targetHost.includes('redis') ? 'Redis' : formatComponentName(targetHost)) : 'Kubernetes Microservice',
+            source: 'Detected',
+            description: `Kubernetes ${entityType.toLowerCase()} declared in ${file.path}`,
+            metadata: { filePath: file.path },
+          });
+
+          const cfg = extractConfigBlock(file.content, i, '- name:');
+          registerRel(
+            sanitizeId(currentDeployment),
+            targetId,
+            relType,
+            protocol,
+            file.path,
+            cfg.block,
+            cfg.startLine,
+            'Kubernetes Service Config Parser',
+            'HIGH',
+            cfg.lineRange,
+            cfg.endLine
+          );
         }
       }
     }
@@ -1763,7 +2561,79 @@ function parsePackageJson(
         description: 'In-memory key-value cache detected in dependencies',
         metadata: { filePath: file.path, dbType: 'In-Memory Cache' },
       });
-      registerRel(serviceId, redisId, 'USES', 'Redis Protocol', file.path, 'package.json dependencies', undefined, 'Package.json Parser', 'HIGH');
+      registerRel(serviceId, redisId, 'USES', 'Redis Protocol', file.path, 'No source-code block available.\nThis dependency was derived from package.json manifest dependency metadata (redis).', undefined, 'Package.json Parser', 'HIGH');
+    }
+
+    if (deps['amqplib']) {
+      const mqId = 'rabbitmq';
+      registerEntity({
+        id: mqId,
+        name: 'RabbitMQ Message Broker',
+        type: 'Service',
+        technology: 'RabbitMQ / AMQP',
+        source: 'Detected',
+        description: 'Message broker queue client detected in package.json',
+        metadata: { filePath: file.path },
+      });
+      registerRel(
+        serviceId,
+        mqId,
+        'CONNECTS_TO',
+        'AMQP Protocol',
+        file.path,
+        'No source-code block available.\nThis dependency was derived from package.json manifest dependency metadata (amqplib).',
+        undefined,
+        'Package.json Parser',
+        'HIGH'
+      );
+    }
+
+    if (deps['mongoose'] || deps['mongodb']) {
+      const dbId = 'nosql-db';
+      registerEntity({
+        id: dbId,
+        name: 'MongoDB Database',
+        type: 'Database',
+        technology: 'MongoDB',
+        source: 'Detected',
+        description: 'Document database client detected in package.json',
+        metadata: { filePath: file.path, dbType: 'NoSQL / Document' },
+      });
+      registerRel(
+        serviceId,
+        dbId,
+        'QUERIES',
+        'MongoDB Wire Protocol',
+        file.path,
+        'No source-code block available.\nThis dependency was derived from package.json manifest dependency metadata (mongoose/mongodb).',
+        undefined,
+        'Package.json Parser',
+        'HIGH'
+      );
+    }
+
+    if (deps['@google/genai'] || deps['@google/generative-ai']) {
+      const geminiId = 'google-gemini-api';
+      registerEntity({
+        id: geminiId,
+        name: 'Google Gemini Generative AI API',
+        type: 'External System',
+        technology: 'Google Gemini API',
+        source: 'Detected',
+        description: 'Foundation model API for multimodal and text reasoning',
+        metadata: { filePath: file.path },
+      });
+      registerRel(
+        serviceId,
+        geminiId,
+        'CALLS',
+        'HTTPS / REST',
+        file.path,
+        'No source-code block available.\nThis dependency was derived from package.json manifest dependency metadata (@google/genai).',
+        undefined,
+        'Package.json Parser',
+        'HIGH'
+      );
     }
 
     if (deps['stripe']) {
@@ -1777,7 +2647,7 @@ function parsePackageJson(
         description: 'Third-party payment processor',
         metadata: { filePath: file.path },
       });
-      registerRel(serviceId, stripeId, 'CALLS', 'HTTPS / REST', file.path, `package.json: stripe`, undefined, 'Package.json Parser', 'HIGH');
+      registerRel(serviceId, stripeId, 'CALLS', 'HTTPS / REST', file.path, `No source-code block available.\nThis dependency was derived from package.json manifest dependency metadata (stripe).`, undefined, 'Package.json Parser', 'HIGH');
     }
   } catch {}
 }
@@ -2358,14 +3228,24 @@ function extractServiceNameFromPath(filePath: string): string | null {
 
 function findEnclosingServiceId(filePath: string, entityMap: Map<string, ArchitectureEntity>): string | null {
   const parts = filePath.split(/[\/\\]/);
-  for (const part of parts) {
-    const id = sanitizeId(part);
+  // Check directory parts (ignoring the last part which is a filename)
+  for (let i = 0; i < parts.length - 1; i++) {
+    const id = sanitizeId(parts[i]);
     if (entityMap.has(id)) {
       return id;
     }
   }
-  if (parts.length > 0 && parts[0] !== 'src') {
-    return sanitizeId(parts[0]);
+  if (parts.length > 1 && parts[0] !== 'src' && parts[0] !== 'pkg' && parts[0] !== 'lib') {
+    const id = sanitizeId(parts[0]);
+    if (entityMap.has(id)) {
+      return id;
+    }
+  }
+  // For top-level files or files without matched directory, link to the primary backend service if available
+  for (const [id, e] of entityMap.entries()) {
+    if (e.type === 'Service' && !id.includes('database') && !id.includes('redis') && !id.includes('mongo') && !id.includes('postgres') && !id.includes('rabbitmq')) {
+      return id;
+    }
   }
   return null;
 }

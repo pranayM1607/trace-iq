@@ -439,6 +439,7 @@ export interface StructuralRiskDelta {
   shiftDirection?: 'Higher structural risk' | 'Lower structural risk' | 'No structural risk change';
   ledger: CausalRiskFactor[];
   attributionStatement: string;
+  brokenDependencies?: Array<{ callerName: string; removedTargetName: string }>;
 }
 
 export interface ArchitectureComparisonResult {
